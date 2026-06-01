@@ -37,6 +37,7 @@ class BacktestConfig:
     swing_right: int = 5
     ob_lookback: int = 800
     fib_lookback_bars: int = 200
+    min_rr: float = 2.0
     output_dir: str = "output"
     cache_dir: str = "data_cache"
     force_download: bool = False
@@ -242,7 +243,7 @@ class BacktestEngine:
             account_equity=self.portfolio.equity,
             zone_low=confluence.low,
             zone_high=confluence.high,
-            min_rr=2.0,
+            min_rr=cfg.min_rr,
             risk_pct=cfg.risk_pct,
             spread_pips=cfg.spread_pips,
         )
