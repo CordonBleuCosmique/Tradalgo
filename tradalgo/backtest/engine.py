@@ -24,21 +24,22 @@ class BacktestConfig:
     source: str = "yfinance"
     csv_path: Optional[str] = None
     ticker: str = "EURUSD=X"
-    start_date: str = "2023-01-01"
+    start_date: str = "2020-01-01"
     end_date: str = "2025-01-01"
     initial_equity: float = 10_000.0
     risk_pct: float = 0.01
     spread_pips: float = 1.5
     max_trades_per_day: int = 2
     eod_close_hour_utc: int = 20
-    swing_left: int = 5
-    swing_right: int = 5
     impulse_bars: int = 3
     impulse_threshold: float = 1.5
-    ob_lookback: int = 800   # ~5 weeks of H1 bars
+    swing_left: int = 5
+    swing_right: int = 5
+    ob_lookback: int = 800
     fib_lookback_bars: int = 200
     output_dir: str = "output"
     cache_dir: str = "data_cache"
+    force_download: bool = False
 
 
 @dataclass
@@ -56,7 +57,7 @@ class BacktestEngine:
     def run(self) -> BacktestResult:
         cfg = self.cfg
 
-        # ── 1. Load & preprocess ──────────────────────────────────────────
+        # 1. Load + preprocess
         mkt = load_data(
             source=cfg.source,
             csv_path=cfg.csv_path,
@@ -64,61 +65,73 @@ class BacktestEngine:
             start=cfg.start_date,
             end=cfg.end_date,
             cache_dir=cfg.cache_dir,
+            force_download=cfg.force_download,
         )
         h1, d1 = preprocess(mkt.h1, mkt.d1)
 
-        # ── 2. D1 indicators (computed once on full D1 — safe via merge_asof) ──
+        if h1.empty:
+            raise ValueError("H1 data is empty after preprocessing. Check date range and source.")
+
+        # 2. D1 indicators (full dataset — safe via backward merge_asof)
         d1_trend = compute_d1_trend(d1)
 
-        # ── 3. H1 indicators (causal by construction) ────────────────────
+        # 3. H1 indicators (causal by construction)
         h1_atr = atr(h1, 14)
         h1_swings = find_swings(h1, cfg.swing_left, cfg.swing_right)
 
-        # ── 4. Pre-detect all OBs & FVGs (visibility gated by confirmation idx) ──
+        # 4. Pre-detect all OBs and FVGs on full H1 (filtered by confirmation in loop)
         all_obs = detect_order_blocks(h1, h1_atr, cfg.impulse_bars, cfg.impulse_threshold)
         all_fvgs = detect_fvgs(h1)
 
-        # ── 5. Find first bar of the official backtest window ─────────────
-        start_ts = pd.Timestamp(cfg.start_date, tz="UTC")
-        end_ts   = pd.Timestamp(cfg.end_date,   tz="UTC")
-        in_range = h1[(h1.index >= start_ts) & (h1.index < end_ts)]
-        if in_range.empty:
-            return BacktestResult([], pd.Series(dtype=float), cfg)
-        start_iloc = h1.index.get_loc(in_range.index[0])
+        # 5. Determine start index in h1 (skip warm-up)
+        start_ts = pd.Timestamp(cfg.start_date).tz_localize("UTC")
+        end_ts = pd.Timestamp(cfg.end_date).tz_localize("UTC")
 
-        # ── 6. Bar-by-bar simulation ──────────────────────────────────────
-        equity_curve: dict[pd.Timestamp, float] = {}
+        h1_in_range = h1[(h1.index >= start_ts) & (h1.index < end_ts)]
+        if h1_in_range.empty:
+            raise ValueError(f"No H1 data in range {cfg.start_date} → {cfg.end_date}.")
+
+        # Use positional indexer to avoid KeyError on duplicate timestamps
+        start_iloc = h1.index.get_loc(h1_in_range.index[0])
+        if isinstance(start_iloc, slice):
+            start_iloc = start_iloc.start
+
+        # 6. Main bar loop
+        equity_curve: dict = {}
         daily_trade_count: dict = {}
 
         for loc_i in range(start_iloc, len(h1)):
             bar = h1.iloc[loc_i]
-            ts  = bar.name
+            ts: pd.Timestamp = bar.name
 
-            # Exit check first (SL/TP can be hit on any bar)
+            if ts >= end_ts:
+                break
+
+            # --- Check exit for open position first ---
             if self.portfolio.open_trade is not None:
                 self._check_exit(h1, loc_i)
 
-            # EOD forced close (no overnight positions)
+            # --- EOD forced close ---
             if self.portfolio.open_trade is not None:
-                self._check_eod(bar, ts)
+                self._check_eod_close(bar, ts)
 
-            # Entry attempt (only if no position and daily quota not exhausted)
+            # --- Look for new entry ---
             if self.portfolio.open_trade is None:
                 date_key = ts.date()
-                if daily_trade_count.get(date_key, 0) < cfg.max_trades_per_day:
+                count_today = daily_trade_count.get(date_key, 0)
+                if count_today < cfg.max_trades_per_day:
                     opened = self._look_for_entry(
-                        h1, d1_trend, h1_atr, h1_swings,
-                        all_obs, all_fvgs, loc_i,
+                        h1, d1_trend, h1_atr, h1_swings, all_obs, all_fvgs, loc_i
                     )
                     if opened:
-                        daily_trade_count[date_key] = daily_trade_count.get(date_key, 0) + 1
+                        daily_trade_count[date_key] = count_today + 1
 
             equity_curve[ts] = self.portfolio.equity
 
-        # Close any position still open at the very last bar
+        # Close any remaining position at end
         if self.portfolio.open_trade is not None:
-            last = h1.iloc[-1]
-            self.portfolio.close(last["Close"], last.name, "eod_close")
+            last_bar = h1.iloc[-1]
+            self.portfolio.close(last_bar["Close"], last_bar.name, "eod_close")
 
         return BacktestResult(
             trades=self.portfolio.trades,
@@ -126,16 +139,16 @@ class BacktestEngine:
             config=cfg,
         )
 
-    # ── helpers ───────────────────────────────────────────────────────────
-
     def _check_exit(self, h1: pd.DataFrame, idx: int) -> None:
-        t   = self.portfolio.open_trade
+        t = self.portfolio.open_trade
+        if t is None:
+            return
         bar = h1.iloc[idx]
-        ts  = bar.name
+        ts = bar.name
 
         if t.direction == "bullish":
+            # SL hit (conservative: SL before TP if same bar touches both)
             if bar["Low"] <= t.stop_loss:
-                # Conservative: SL fills even if TP was also touched (gap scenario)
                 self.portfolio.close(t.stop_loss, ts, "sl_hit")
             elif bar["High"] >= t.take_profit:
                 self.portfolio.close(t.take_profit, ts, "tp_hit")
@@ -145,11 +158,11 @@ class BacktestEngine:
             elif bar["Low"] <= t.take_profit:
                 self.portfolio.close(t.take_profit, ts, "tp_hit")
 
-    def _check_eod(self, bar: pd.Series, ts: pd.Timestamp) -> None:
+    def _check_eod_close(self, bar: pd.Series, ts: pd.Timestamp) -> None:
         cfg = self.cfg
-        is_eod      = ts.hour >= cfg.eod_close_hour_utc
-        is_friday   = ts.weekday() == 4 and ts.hour >= 20
-        if is_eod or is_friday:
+        is_eod = ts.hour >= cfg.eod_close_hour_utc
+        is_friday_night = ts.weekday() == 4 and ts.hour >= 20
+        if is_eod or is_friday_night:
             self.portfolio.close(bar["Close"], ts, "eod_close")
 
     def _look_for_entry(
@@ -162,57 +175,64 @@ class BacktestEngine:
         all_fvgs: list[FairValueGap],
         idx: int,
     ) -> bool:
+        """Evaluate entry conditions at the given bar index. Returns True if trade opened."""
         cfg = self.cfg
         bar = h1.iloc[idx]
-        ts  = bar.name
+        ts: pd.Timestamp = bar.name
 
-        # Gate 1 – trading session
+        # Gate 1: Session filter
         if not is_in_session(ts):
             return False
 
-        # Gate 2 – macro trend
+        # Gate 2: D1 trend (backward merge — no look-ahead)
         trend = get_trend_at_h1_bar(ts, d1_trend)
         if trend == TrendLabel.NEUTRAL:
             return False
-        direction = trend.value  # "bullish" | "bearish"
+        direction = trend.value
 
-        # Gate 3 – active Order Blocks
-        # Update mitigation for ALL directions on every bar
-        for _dir in ("bullish", "bearish"):
-            update_mitigation(all_obs, bar, _dir)
+        # Gate 3: Active OBs — only visible after their confirmation bar has passed
         active_obs = [
             ob for ob in all_obs
-            if ob.confirmation_bar_idx < idx
+            if ob.confirmation_bar_idx < idx        # confirmed before current bar
             and not ob.is_mitigated
             and ob.direction == direction
             and ob.bar_idx >= max(0, idx - cfg.ob_lookback)
         ]
+
+        # Update mitigation state for both directions on every bar
+        for _dir in ("bullish", "bearish"):
+            update_mitigation(all_obs, bar, _dir)
+
         if not active_obs:
             return False
 
-        # Gate 4 – Fibonacci (only confirmed swings)
-        safe_swing = h1_swings.iloc[: max(0, idx - cfg.swing_right)]
-        safe_atr   = h1_atr.iloc[: max(0, idx - cfg.swing_right)]
-        anchor = find_anchor_swing(safe_swing, safe_atr, direction, cfg.fib_lookback_bars)
+        # Gate 4: Fibonacci — only use confirmed swings
+        safe_end = idx - cfg.swing_right
+        if safe_end <= 0:
+            return False
+        safe_swings = h1_swings.iloc[:safe_end]
+        safe_atr = h1_atr.iloc[:safe_end]
+
+        anchor = find_anchor_swing(safe_swings, safe_atr, direction, cfg.fib_lookback_bars)
         if anchor is None:
             return False
         fib_levels = compute_fib_retracement(*anchor)
 
-        # Gate 5 – OB ∩ Fibonacci golden zone confluence
+        # Gate 5: Confluence (OB ∩ Fibonacci golden zone)
         atr_val = float(h1_atr.iloc[idx])
-        if np.isnan(atr_val):
+        if np.isnan(atr_val) or atr_val == 0:
             return False
         confluence = find_confluence(active_obs, fib_levels, direction, atr_val)
         if confluence is None:
             return False
 
-        # Gate 6 – entry trigger candle (engulfing / pin bar)
+        # Gate 6: Entry trigger candle pattern
         signal = check_entry_trigger(h1, idx, direction, confluence)
         if signal is None:
             return False
 
-        # Gate 7 – risk/reward
-        liq_levels = get_liquidity_levels(safe_swing, bar["Close"], direction)
+        # Gate 7: Risk calculation
+        liq_levels = get_liquidity_levels(safe_swings, float(bar["Close"]), direction)
         setup = calculate_trade_setup(
             direction=direction,
             entry_price=signal.entry_price,
@@ -229,7 +249,6 @@ class BacktestEngine:
         if setup is None:
             return False
 
-        # Open trade
         trade = TradeRecord(
             trade_id=self.portfolio.next_trade_id(),
             direction=direction,
