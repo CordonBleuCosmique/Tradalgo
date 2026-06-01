@@ -47,6 +47,9 @@ def _run_swing(args, ts: str) -> None:
         use_trailing=not args.no_trailing,
         trail_buffer_atr=args.trail_buffer,
         max_hold_days=args.max_hold,
+        sizing_mode=args.sizing,
+        margin_pct=args.margin_pct,
+        leverage=args.leverage,
         output_dir=args.output,
         cache_dir=args.cache,
         force_download=args.no_cache,
@@ -100,6 +103,10 @@ def main() -> None:
     p.add_argument("--trail-buffer",   type=float, default=1.0,  help="[swing] Trailing-stop buffer × ATR (default 1.0)")
     p.add_argument("--max-hold",       type=int,   default=180,  help="[swing] Force-close after N days (default 180)")
     p.add_argument("--no-trailing",    action="store_true",      help="[swing] Disable structure trailing stop")
+    p.add_argument("--sizing",         default="risk", choices=["risk", "margin"],
+                   help="[swing] Position sizing: 'risk' (risk_pct of equity) or 'margin' (margin_pct × leverage)")
+    p.add_argument("--margin-pct",     type=float, default=0.10, help="[swing] Margin committed per position (default 0.10 = 10%%)")
+    p.add_argument("--leverage",       type=float, default=30.0, help="[swing] Account leverage for margin sizing (default 30)")
     p.add_argument("--wf",      action="store_true",          help="Run walk-forward validation instead of single backtest")
     p.add_argument("--is-years",type=int,   default=3,        help="Walk-forward in-sample window in years (default 3)")
     p.add_argument("--oos-years",type=int,  default=1,        help="Walk-forward out-of-sample window in years (default 1)")

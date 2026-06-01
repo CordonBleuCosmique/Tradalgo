@@ -3,7 +3,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 PIP = 0.0001
-PIP_VALUE_USD = 10.0    # USD per pip per standard lot (100k units)
+PIP_VALUE_USD = 10.0     # USD per pip per standard lot (100k units)
+UNITS_PER_LOT = 100_000  # base-currency units in 1 standard lot
 MIN_LOT = 0.01
 
 
@@ -29,6 +30,9 @@ def calculate_swing_setup(
     risk_pct: float = 0.03,
     spread_pips: float = 1.5,
     min_lot: float = MIN_LOT,
+    sizing_mode: str = "risk",
+    margin_pct: float = 0.10,
+    leverage: float = 30.0,
 ) -> Optional[SwingSetup]:
     """
     Risk model for swing trades.
@@ -41,6 +45,14 @@ def calculate_swing_setup(
     If a liquidity level sits beyond the tp_rr backstop in the trade's
     favour, the nearest such level is used instead (lets winners aim for a
     real structural target rather than an arbitrary multiple).
+
+    Position sizing (sizing_mode):
+    - "risk"   : lot sized so SL distance risks risk_pct of equity (classic).
+    - "margin" : each position commits margin_pct of *current* equity as
+                 margin at the given leverage. Notional = margin_pct × equity
+                 × leverage; lot = notional / (UNITS_PER_LOT × price). The
+                 dollar risk then floats with the SL distance and is reported
+                 in risk_usd for R-multiple tracking.
     """
     spread = spread_pips * PIP
 
@@ -71,12 +83,22 @@ def calculate_swing_setup(
 
     reward = abs(tp - effective_entry)
     actual_rr = reward / risk
+    sl_pips = risk / PIP
 
-    # Position sizing
-    risk_usd = account_equity * risk_pct
-    sl_pips  = risk / PIP
-    raw_lot  = risk_usd / (sl_pips * PIP_VALUE_USD)
+    # ── Position sizing ───────────────────────────────────────────────────
+    if sizing_mode == "margin":
+        # Margin-based: commit margin_pct of equity at the given leverage.
+        notional = margin_pct * account_equity * leverage
+        raw_lot  = notional / (UNITS_PER_LOT * effective_entry)
+    else:
+        # Risk-based: size so the SL distance risks risk_pct of equity.
+        target_risk_usd = account_equity * risk_pct
+        raw_lot = target_risk_usd / (sl_pips * PIP_VALUE_USD)
+
     lot_size = max(min_lot, round(raw_lot, 2))
+
+    # Actual dollar risk implied by the final (rounded, floored) lot size.
+    risk_usd = sl_pips * PIP_VALUE_USD * lot_size
 
     return SwingSetup(
         entry_price=effective_entry,

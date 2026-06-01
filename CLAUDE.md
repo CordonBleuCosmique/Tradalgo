@@ -45,10 +45,20 @@ python run_backtest.py --source histdata_csv --csv path/to/EURUSD_H1.csv \
 python run_backtest.py --source histdata_csv --csv path/to/EURUSD_H1.csv \
     --start 2019-01-01 --end 2025-01-01 --wf --equity 10000
 
-# Swing mode (D1 macro, hold weeks/months, €250 account, 3% risk)
+# Swing mode (D1 macro, hold weeks/months, €250 account)
 python run_backtest.py --mode swing --source histdata_csv --csv path/to/EURUSD_H1.csv \
     --start 2021-01-01 --end 2025-01-01 --equity 250 --risk 0.03
 #   swing params: --tp-rr 6.0  --trail-buffer 1.0  --max-hold 180  --no-trailing
+
+# Swing with margin-based sizing (10% margin at 1:30 leverage)
+python run_backtest.py --mode swing --source histdata_csv --csv path/to/EURUSD_H1.csv \
+    --start 2021-01-01 --end 2025-01-01 --equity 250 \
+    --sizing margin --margin-pct 0.10 --leverage 30
+#   Sizing modes:
+#     risk   : lot sized so SL distance risks risk_pct of equity
+#     margin : notional = margin_pct × equity × leverage; lot = notional/(100k×price)
+#   NOTE: 0.01 min-lot floor dominates below ~$400 equity (10%×30 → $750 notional
+#         < $1,200 = notional of 0.01 lot). Margin sizing only scales above that.
 
 # Anti-look-ahead tests
 pip install pytest && pytest tests/ -v

@@ -29,6 +29,11 @@ class SwingConfig:
     initial_equity: float = 250.0
     risk_pct: float = 0.03
 
+    # Position sizing: "risk" (risk_pct of equity) or "margin" (margin_pct at leverage)
+    sizing_mode: str = "risk"
+    margin_pct: float = 0.10
+    leverage: float = 30.0
+
     spread_pips: float = 1.5
     atr_period: int = 14
     swing_left: int = 3
@@ -267,6 +272,9 @@ class SwingEngine:
             tp_rr=cfg.tp_rr,
             risk_pct=cfg.risk_pct,
             spread_pips=cfg.spread_pips,
+            sizing_mode=cfg.sizing_mode,
+            margin_pct=cfg.margin_pct,
+            leverage=cfg.leverage,
         )
         if setup is None:
             return False
