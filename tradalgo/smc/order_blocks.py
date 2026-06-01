@@ -81,11 +81,16 @@ def detect_order_blocks(
 
 
 def update_mitigation(obs: list[OrderBlock], bar: pd.Series, direction: str) -> None:
-    """Mark OBs as mitigated when price fully trades through the zone."""
+    """
+    Mark OBs as mitigated per ICT rules:
+    - Bullish OB: mitigated when the bar CLOSES below zone_low (wick alone is not enough)
+    - Bearish OB: mitigated when the bar CLOSES above zone_high
+    """
+    close = bar["Close"]
     for ob in obs:
         if ob.is_mitigated or ob.direction != direction:
             continue
-        if direction == "bullish" and bar["Low"] < ob.zone_low:
+        if direction == "bullish" and close < ob.zone_low:
             ob.is_mitigated = True
-        elif direction == "bearish" and bar["High"] > ob.zone_high:
+        elif direction == "bearish" and close > ob.zone_high:
             ob.is_mitigated = True
