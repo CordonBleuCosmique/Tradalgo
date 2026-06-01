@@ -38,6 +38,7 @@ class BacktestConfig:
     ob_lookback: int = 800
     fib_lookback_bars: int = 200
     min_rr: float = 2.0
+    min_trend_pips: float = 0.0
     output_dir: str = "output"
     cache_dir: str = "data_cache"
     force_download: bool = False
@@ -74,7 +75,7 @@ class BacktestEngine:
             raise ValueError("H1 data is empty after preprocessing. Check date range and source.")
 
         # 2. D1 indicators (full dataset — safe via backward merge_asof)
-        d1_trend = compute_d1_trend(d1)
+        d1_trend = compute_d1_trend(d1, min_ema_gap_pips=cfg.min_trend_pips)
 
         # 3. H1 indicators (causal by construction)
         h1_atr = atr(h1, 14)

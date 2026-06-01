@@ -46,6 +46,7 @@ def main() -> None:
     p.add_argument("--impulse",        type=float, default=1.5,  help="OB impulse threshold × ATR (default 1.5)")
     p.add_argument("--ob-lookback",    type=int,   default=800,  help="OB lookback window in bars (default 800)")
     p.add_argument("--max-trades-day", type=int,   default=2,    help="Max trades per day (default 2)")
+    p.add_argument("--min-trend-pips", type=float, default=0.0,  help="Min EMA50/200 gap in pips to trade (0 = no filter)")
     p.add_argument("--wf",      action="store_true",          help="Run walk-forward validation instead of single backtest")
     p.add_argument("--is-years",type=int,   default=3,        help="Walk-forward in-sample window in years (default 3)")
     p.add_argument("--oos-years",type=int,  default=1,        help="Walk-forward out-of-sample window in years (default 1)")
@@ -69,6 +70,7 @@ def main() -> None:
         impulse_threshold=args.impulse,
         ob_lookback=args.ob_lookback,
         max_trades_per_day=args.max_trades_day,
+        min_trend_pips=args.min_trend_pips,
         output_dir=args.output,
         cache_dir=args.cache,
     )
