@@ -107,6 +107,10 @@ class BacktestEngine:
             if ts >= end_ts:
                 break
 
+            # Update OB mitigation on every bar (both directions)
+            for _dir in ("bullish", "bearish"):
+                update_mitigation(all_obs, bar, _dir)
+
             # --- Check exit for open position first ---
             if self.portfolio.open_trade is not None:
                 self._check_exit(h1, loc_i)
@@ -199,10 +203,6 @@ class BacktestEngine:
             and ob.bar_idx >= max(0, idx - cfg.ob_lookback)
         ]
 
-        # Update mitigation state for both directions on every bar
-        for _dir in ("bullish", "bearish"):
-            update_mitigation(all_obs, bar, _dir)
-
         if not active_obs:
             return False
 
@@ -232,7 +232,7 @@ class BacktestEngine:
             return False
 
         # Gate 7: Risk calculation
-        liq_levels = get_liquidity_levels(safe_swings, float(bar["Close"]), direction)
+        liq_levels = get_liquidity_levels(safe_swings, float(bar["Close"]), direction, atr=atr_val)
         setup = calculate_trade_setup(
             direction=direction,
             entry_price=signal.entry_price,

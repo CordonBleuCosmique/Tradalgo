@@ -34,16 +34,23 @@ def _load_yfinance(ticker: str, interval: str, start: str, end: str) -> pd.DataF
 def _load_csv(csv_path: str, source: str) -> pd.DataFrame:
     path = Path(csv_path)
     if source == "histdata_csv":
-        # Histdata.com format: Date;Time;Open;High;Low;Close;Volume (semicolon)
-        try:
-            df = pd.read_csv(path, sep=";", header=None,
-                             names=["date", "time", "Open", "High", "Low", "Close", "Volume"])
-            df["datetime"] = pd.to_datetime(df["date"] + " " + df["time"], format="%Y.%m.%d %H:%M")
-        except Exception:
-            df = pd.read_csv(path, sep=",", header=None,
-                             names=["date", "time", "Open", "High", "Low", "Close", "Volume"])
-            df["datetime"] = pd.to_datetime(df["date"] + " " + df["time"])
-        df = df.set_index("datetime")[["Open", "High", "Low", "Close", "Volume"]]
+        # Auto-detect Histdata.com format variant:
+        #   Modern (6 cols):  YYYYMMDD HHMMSS;Open;High;Low;Close;Volume
+        #   Legacy (7 cols):  YYYY.MM.DD;HH:MM;Open;High;Low;Close;Volume
+        sep = ";" if ";" in path.read_text(encoding="utf-8", errors="ignore")[:200] else ","
+        raw = pd.read_csv(path, sep=sep, header=None)
+        if raw.shape[1] == 6:
+            # Modern single-field datetime
+            raw.columns = ["datetime", "Open", "High", "Low", "Close", "Volume"]
+            raw["datetime"] = pd.to_datetime(raw["datetime"], format="%Y%m%d %H%M%S")
+        else:
+            # Legacy two-field datetime (date + time)
+            raw.columns = ["date", "time", "Open", "High", "Low", "Close", "Volume"]
+            raw["datetime"] = pd.to_datetime(
+                raw["date"].astype(str) + " " + raw["time"].astype(str),
+                infer_datetime_format=True,
+            )
+        df = raw.set_index("datetime")[["Open", "High", "Low", "Close", "Volume"]]
         df.index = df.index.tz_localize("UTC")
     elif source == "mt4_csv":
         # MT4 format: Date,Time,Open,High,Low,Close,Volume
@@ -126,7 +133,14 @@ def load_data(
     if not force_download and d1_cache.exists():
         d1 = _load_cache(d1_cache)
     else:
-        d1 = _load_yfinance(ticker, "1d", warmup_start, end)
+        if source == "yfinance":
+            d1 = _load_yfinance(ticker, "1d", warmup_start, end)
+        else:
+            # Resample D1 directly from the H1 CSV — no network needed
+            d1 = h1.resample("1D").agg(
+                {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
+            ).dropna(subset=["Open"])
+            d1 = d1[d1.index.dayofweek < 5]
         _save_cache(d1, d1_cache)
 
     return MarketData(h1=h1, d1=d1)

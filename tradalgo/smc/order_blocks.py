@@ -44,9 +44,10 @@ def detect_order_blocks(
 
         conf_idx = i + impulse_bars
 
-        # Bullish OB: bearish candle at i, strong bullish impulse after
+        # Bullish OB: bearish candle at i, strong bullish impulse after.
+        # Impulse measured as High-Low displacement (close[i+1..conf] all bullish).
         if closes[i] < opens[i]:
-            impulse_move = closes[conf_idx] - closes[i]
+            impulse_move = highs[conf_idx] - lows[i]   # full displacement of the move
             all_bullish = all(closes[j] > opens[j] for j in range(i + 1, conf_idx + 1))
             if all_bullish and impulse_move > impulse_threshold * atv:
                 zone_size = highs[i] - lows[i]
@@ -60,9 +61,9 @@ def detect_order_blocks(
                         confirmation_bar_idx=conf_idx,
                     ))
 
-        # Bearish OB: bullish candle at i, strong bearish impulse after
+        # Bearish OB: bullish candle at i, strong bearish impulse after.
         elif closes[i] > opens[i]:
-            impulse_move = closes[i] - closes[conf_idx]
+            impulse_move = highs[i] - lows[conf_idx]   # full displacement of the move
             all_bearish = all(closes[j] < opens[j] for j in range(i + 1, conf_idx + 1))
             if all_bearish and impulse_move > impulse_threshold * atv:
                 zone_size = highs[i] - lows[i]
