@@ -109,7 +109,7 @@ def load_data(
     csv_path: required when source != "yfinance"
     start/end: backtest date range; warm-up year added internally
     """
-    warmup_start = str(pd.Timestamp(start) - pd.DateOffset(years=1))[:10]
+    warmup_start = str(pd.Timestamp(start) - pd.DateOffset(years=2))[:10]
 
     safe_end = end.replace("-", "")
     h1_cache = _cache_path(cache_dir, f"H1_{source}_{start.replace('-','')}_{safe_end}")
