@@ -15,11 +15,20 @@ tradalgo/
 ├── indicators/     ema.py, atr.py, swing.py
 ├── smc/            structure.py, order_blocks.py, fvg.py, liquidity.py
 ├── strategy/       trend_filter.py, fibonacci.py, confluence.py, entry_signals.py, risk.py
-├── backtest/       engine.py (main loop), portfolio.py, walk_forward.py
+│                   trend_w1.py, swing_exits.py, swing_risk.py  (swing/D1 mode)
+├── backtest/       engine.py (intraday H1), swing_engine.py (swing D1), portfolio.py, walk_forward.py
 └── reporting/      metrics.py, trade_log.py, charts.py
-run_backtest.py     CLI entry point
-tests/              test_no_lookahead.py
+run_backtest.py     CLI entry point  (--mode intraday | swing)
+download_histdata.py  auto-download EURUSD M1→H1 from Histdata.com
+tests/              test_no_lookahead.py, test_swing_no_lookahead.py
 ```
+
+## Two strategy modes
+- **intraday** (default): H1 SMC/Fibonacci, D1 trend filter, closes by 20:00 UTC. Few trades/yr.
+- **swing**: D1 Order Blocks + Fibonacci, W1 (weekly EMA20/50) macro trend, structure-based
+  trailing stop, holds days→months (max 180d). Targets large R per trade. No session/EOD close.
+  Note: on tiny accounts (€250) with wide D1 stops (150+ pips), the 0.01 min-lot forces
+  per-trade risk above the configured risk_pct — micro-lot brokers needed for true 3% sizing.
 
 ## Running
 ```bash
@@ -35,6 +44,11 @@ python run_backtest.py --source histdata_csv --csv path/to/EURUSD_H1.csv \
 # Walk-forward validation (5 years, IS=3yr OOS=1yr)
 python run_backtest.py --source histdata_csv --csv path/to/EURUSD_H1.csv \
     --start 2019-01-01 --end 2025-01-01 --wf --equity 10000
+
+# Swing mode (D1 macro, hold weeks/months, €250 account, 3% risk)
+python run_backtest.py --mode swing --source histdata_csv --csv path/to/EURUSD_H1.csv \
+    --start 2021-01-01 --end 2025-01-01 --equity 250 --risk 0.03
+#   swing params: --tp-rr 6.0  --trail-buffer 1.0  --max-hold 180  --no-trailing
 
 # Anti-look-ahead tests
 pip install pytest && pytest tests/ -v
