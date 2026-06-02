@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EURUSD SMC/ICT + Fibonacci — Intraday Backtester
+EURUSD SMC/ICT + Fibonacci — Multi-Mode Backtester
 Usage: python run_backtest.py --help
 """
 from __future__ import annotations
@@ -10,6 +10,7 @@ from pathlib import Path
 
 from tradalgo.backtest.engine import BacktestConfig, BacktestEngine
 from tradalgo.backtest.swing_engine import SwingConfig, SwingEngine
+from tradalgo.backtest.mtf_engine import MTFConfig, MTFEngine
 from tradalgo.backtest.walk_forward import run_walk_forward, print_wf_summary
 from tradalgo.reporting.metrics import compute_metrics
 from tradalgo.reporting.trade_log import write_trade_log
@@ -60,11 +61,10 @@ def _run_swing(args, ts: str) -> None:
     metrics = compute_metrics(result.trades, result.equity_curve, args.equity)
     _print_metrics(metrics, args.equity)
 
-    # Exit-reason breakdown (swing-specific insight)
     closed = [t for t in result.trades if t.exit_reason != "open"]
     if closed:
         from collections import Counter
-        reasons = Counter(t.exit_reason for t in closed)
+        reasons  = Counter(t.exit_reason for t in closed)
         avg_hold = sum((t.exit_time - t.entry_time).days for t in closed
                        if t.exit_time and t.entry_time) / len(closed)
         print(f"  Exit reasons     : {dict(reasons)}")
@@ -75,54 +75,119 @@ def _run_swing(args, ts: str) -> None:
     chart_path  = f"{args.output}/swing_equity_{ts}.png"
     write_trade_log(result.trades, trades_path)
     plot_equity_curve(result.equity_curve, chart_path, title="EURUSD Swing D1 — Backtest")
+    print(f"\nTrade log  → {trades_path}")
+    print(f"Chart      → {chart_path}")
 
+
+def _run_mtf(args, ts: str) -> None:
+    cfg = MTFConfig(
+        source=args.source,
+        csv_path=args.csv,
+        start_date=args.start,
+        end_date=args.end,
+        initial_equity=args.equity,
+        risk_pct=args.risk,
+        spread_pips=args.spread,
+        min_rr=args.min_rr,
+        min_trend_pips=args.min_trend_pips,
+        h4_impulse_bars=args.h4_impulse_bars,
+        h4_impulse_threshold=args.impulse,
+        h4_ob_lookback=args.h4_ob_lookback,
+        h4_fib_lookback=args.h4_fib_lookback,
+        max_trades_per_day=args.max_trades_day,
+        output_dir=args.output,
+        cache_dir=args.cache,
+        force_download=args.no_cache,
+    )
+    print(f"MTF backtest (W1/D1→H4→H1): {args.start} → {args.end}  |  "
+          f"Equity: ${args.equity:,.0f}  |  Source: {args.source}")
+    result  = MTFEngine(cfg).run()
+    metrics = compute_metrics(result.trades, result.equity_curve, args.equity)
+    _print_metrics(metrics, args.equity)
+
+    trades_path = f"{args.output}/mtf_trades_{ts}.csv"
+    chart_path  = f"{args.output}/mtf_equity_{ts}.png"
+    write_trade_log(result.trades, trades_path)
+    plot_equity_curve(result.equity_curve, chart_path,
+                      title="EURUSD MTF (W1/D1→H4→H1) — Backtest")
     print(f"\nTrade log  → {trades_path}")
     print(f"Chart      → {chart_path}")
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="EURUSD SMC/Fibonacci intraday backtester")
+    p = argparse.ArgumentParser(description="EURUSD SMC/Fibonacci backtester")
     p.add_argument("--source",  default="yfinance",
                    choices=["yfinance", "histdata_csv", "mt4_csv", "generic_csv"],
                    help="Data source (default: yfinance, max ~2 yrs H1)")
-    p.add_argument("--csv",     default=None,  help="Path to CSV file (required for non-yfinance sources)")
-    p.add_argument("--mode",    default="intraday", choices=["intraday", "swing"],
-                   help="Strategy: 'intraday' (H1 SMC, default) or 'swing' (D1 macro, hold weeks)")
+    p.add_argument("--csv",     default=None,
+                   help="Path to CSV file (required for non-yfinance sources)")
+    p.add_argument("--mode",    default="intraday",
+                   choices=["intraday", "swing", "mtf"],
+                   help="Strategy mode: intraday (H1), swing (D1), mtf (W1/D1→H4→H1)")
     p.add_argument("--start",   default="2023-01-01", help="Backtest start (YYYY-MM-DD)")
     p.add_argument("--end",     default="2025-01-01", help="Backtest end   (YYYY-MM-DD)")
-    p.add_argument("--equity",  type=float, default=10_000.0, help="Initial account equity in USD")
-    p.add_argument("--risk",    type=float, default=0.01,     help="Risk per trade as fraction (default 0.01 = 1%%)")
-    p.add_argument("--spread",         type=float, default=1.5,  help="Spread in pips (default 1.5)")
-    p.add_argument("--min-rr",         type=float, default=2.0,  help="Minimum R:R ratio to take a trade (default 2.0)")
-    p.add_argument("--impulse",        type=float, default=1.5,  help="OB impulse threshold × ATR (default 1.5)")
-    p.add_argument("--ob-lookback",    type=int,   default=800,  help="OB lookback window in bars (default 800)")
-    p.add_argument("--max-trades-day", type=int,   default=2,    help="Max trades per day (default 2)")
-    p.add_argument("--min-trend-pips", type=float, default=0.0,  help="Min EMA50/200 gap in pips to trade (0 = no filter)")
+    p.add_argument("--equity",  type=float, default=10_000.0,
+                   help="Initial account equity in USD")
+    p.add_argument("--risk",    type=float, default=0.01,
+                   help="Risk per trade as fraction (default 0.01 = 1%%)")
+    p.add_argument("--spread",         type=float, default=1.5,
+                   help="Spread in pips (default 1.5)")
+    p.add_argument("--min-rr",         type=float, default=2.0,
+                   help="Minimum R:R ratio (default 2.0)")
+    p.add_argument("--impulse",        type=float, default=1.5,
+                   help="OB impulse threshold × ATR (default 1.5)")
+    p.add_argument("--ob-lookback",    type=int,   default=800,
+                   help="[intraday/swing] OB lookback in bars (default 800)")
+    p.add_argument("--max-trades-day", type=int,   default=2,
+                   help="Max trades per day (default 2)")
+    p.add_argument("--min-trend-pips", type=float, default=0.0,
+                   help="Min EMA gap in pips to trade (0 = no filter)")
     # ── Swing-mode params ──
-    p.add_argument("--tp-rr",          type=float, default=6.0,  help="[swing] Backstop take-profit in R (default 6.0)")
-    p.add_argument("--trail-buffer",   type=float, default=1.0,  help="[swing] Trailing-stop buffer × ATR (default 1.0)")
-    p.add_argument("--max-hold",       type=int,   default=180,  help="[swing] Force-close after N days (default 180)")
-    p.add_argument("--no-trailing",    action="store_true",      help="[swing] Disable structure trailing stop")
-    p.add_argument("--sizing",         default="risk", choices=["risk", "margin"],
-                   help="[swing] Position sizing: 'risk' (risk_pct of equity) or 'margin' (margin_pct × leverage)")
-    p.add_argument("--margin-pct",     type=float, default=0.10, help="[swing] Margin committed per position (default 0.10 = 10%%)")
-    p.add_argument("--leverage",       type=float, default=30.0, help="[swing] Account leverage for margin sizing (default 30)")
-    p.add_argument("--wf",      action="store_true",          help="Run walk-forward validation instead of single backtest")
-    p.add_argument("--is-years",type=int,   default=3,        help="Walk-forward in-sample window in years (default 3)")
-    p.add_argument("--oos-years",type=int,  default=1,        help="Walk-forward out-of-sample window in years (default 1)")
-    p.add_argument("--output",  default="output",             help="Output directory")
-    p.add_argument("--cache",   default="data_cache",         help="Data cache directory")
-    p.add_argument("--no-cache",action="store_true",          help="Force re-download / re-parse data")
+    p.add_argument("--tp-rr",        type=float, default=6.0,
+                   help="[swing] Backstop TP in R (default 6.0)")
+    p.add_argument("--trail-buffer", type=float, default=1.0,
+                   help="[swing] Trailing-stop buffer × ATR (default 1.0)")
+    p.add_argument("--max-hold",     type=int,   default=180,
+                   help="[swing] Force-close after N days (default 180)")
+    p.add_argument("--no-trailing",  action="store_true",
+                   help="[swing] Disable structure trailing stop")
+    p.add_argument("--sizing",       default="risk", choices=["risk", "margin"],
+                   help="[swing] Position sizing mode")
+    p.add_argument("--margin-pct",   type=float, default=0.10,
+                   help="[swing] Margin per position (default 0.10 = 10%%)")
+    p.add_argument("--leverage",     type=float, default=30.0,
+                   help="[swing] Leverage for margin sizing (default 30)")
+    # ── MTF-mode params ──
+    p.add_argument("--h4-ob-lookback",   type=int,   default=60,
+                   help="[mtf] H4 OB lookback in H4 bars (default 60 ≈ 10 days)")
+    p.add_argument("--h4-fib-lookback",  type=int,   default=60,
+                   help="[mtf] H4 Fibonacci anchor lookback in H4 bars (default 60)")
+    p.add_argument("--h4-impulse-bars",  type=int,   default=2,
+                   help="[mtf] H4 OB impulse confirmation bars (default 2)")
+    # ── Walk-forward ──
+    p.add_argument("--wf",       action="store_true",
+                   help="Run walk-forward validation (intraday mode only)")
+    p.add_argument("--is-years", type=int, default=3,
+                   help="Walk-forward in-sample window in years (default 3)")
+    p.add_argument("--oos-years",type=int, default=1,
+                   help="Walk-forward out-of-sample window in years (default 1)")
+    p.add_argument("--output",   default="output",     help="Output directory")
+    p.add_argument("--cache",    default="data_cache", help="Data cache directory")
+    p.add_argument("--no-cache", action="store_true",  help="Force re-download / re-parse data")
     args = p.parse_args()
 
-    ts  = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     Path(args.output).mkdir(parents=True, exist_ok=True)
 
-    # ── Swing mode (D1 macro) ──────────────────────────────────────────────
     if args.mode == "swing":
         _run_swing(args, ts)
         return
 
+    if args.mode == "mtf":
+        _run_mtf(args, ts)
+        return
+
+    # ── Intraday (H1) ────────────────────────────────────────────────────
     config = BacktestConfig(
         source=args.source,
         csv_path=args.csv,
@@ -140,7 +205,6 @@ def main() -> None:
         cache_dir=args.cache,
     )
 
-    # ── Walk-forward mode ──────────────────────────────────────────────────
     if args.wf:
         print(f"Walk-forward validation: {args.start} → {args.end}")
         print(f"  IS={args.is_years}yr  OOS={args.oos_years}yr  step=6m\n")
@@ -152,8 +216,6 @@ def main() -> None:
             oos_years=args.oos_years,
         )
         print_wf_summary(windows)
-
-        # Save OOS equity curves as individual charts
         for w in windows:
             if not w.result.equity_curve.empty:
                 chart = f"{args.output}/wf_fold{w.fold}_equity_{ts}.png"
@@ -163,19 +225,15 @@ def main() -> None:
                 )
         return
 
-    # ── Single backtest ───────────────────────────────────────────────────
     print(f"Backtest: {args.start} → {args.end}  |  Equity: ${args.equity:,.0f}  |  Source: {args.source}")
     result  = BacktestEngine(config).run()
     metrics = compute_metrics(result.trades, result.equity_curve, args.equity)
-
     _print_metrics(metrics, args.equity)
 
     trades_path = f"{args.output}/trades_{ts}.csv"
     chart_path  = f"{args.output}/equity_curve_{ts}.png"
-
     write_trade_log(result.trades, trades_path)
     plot_equity_curve(result.equity_curve, chart_path)
-
     print(f"\nTrade log  → {trades_path}")
     print(f"Chart      → {chart_path}")
 
