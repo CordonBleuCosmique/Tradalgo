@@ -1,0 +1,263 @@
+/* ── Tradalgo UI — Dark trading terminal theme ── */
+:root {
+  --bg:       #0d1117;
+  --bg-card:  #161b22;
+  --bg-input: #0d1117;
+  --border:   #30363d;
+  --text:     #c9d1d9;
+  --muted:    #8b949e;
+  --green:    #3fb950;
+  --red:      #f85149;
+  --blue:     #58a6ff;
+  --orange:   #d29922;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.875rem;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Navbar ── */
+.navbar {
+  background: var(--bg-card) !important;
+  border-bottom: 1px solid var(--border) !important;
+  padding: 0.5rem 1rem;
+  gap: 1.5rem;
+}
+.navbar-brand {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text) !important;
+}
+.nav-tabs-custom {
+  display: flex;
+  gap: 2px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 6px;
+  padding: 3px;
+}
+.nav-tabs-custom button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 5px 14px;
+  border-radius: 4px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s;
+}
+.nav-tabs-custom button:hover  { color: var(--text); background: rgba(255,255,255,0.06); }
+.nav-tabs-custom button.active { color: #fff; background: #1f6feb; }
+
+/* ── Cards ── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.card-header {
+  background: rgba(0,0,0,0.25);
+  border-bottom: 1px solid var(--border);
+  padding: 0.55rem 0.9rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* ── Form elements ── */
+.form-label {
+  font-size: 0.76rem;
+  color: var(--muted);
+  margin-bottom: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.form-control, .form-select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.82rem;
+  border-radius: 5px;
+  padding: 0.3rem 0.55rem;
+}
+.form-control:focus, .form-select:focus {
+  background: var(--bg-input);
+  border-color: #388bfd;
+  color: var(--text);
+  box-shadow: 0 0 0 2px rgba(56,139,253,0.2);
+  outline: none;
+}
+.form-control::placeholder { color: var(--muted); }
+
+/* ── Buttons ── */
+.btn { font-size: 0.82rem; border-radius: 5px; }
+.btn-primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+.btn-primary:hover { background: #388bfd; border-color: #388bfd; }
+.btn-outline-secondary {
+  border-color: var(--border);
+  color: var(--muted);
+}
+.btn-outline-secondary:hover { background: rgba(255,255,255,0.06); color: var(--text); border-color: var(--muted); }
+.btn-sm { padding: 0.25rem 0.65rem; }
+
+/* ── Metric cards ── */
+.metric-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.7rem 0.9rem;
+}
+.metric-card .metric-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.metric-card .metric-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-top: 2px;
+}
+.metric-card.positive .metric-value { color: var(--green); }
+.metric-card.negative .metric-value { color: var(--red); }
+.metric-card.neutral  .metric-value { color: var(--text); }
+.metric-card.warning  .metric-value { color: var(--orange); }
+
+/* ── Trade table ── */
+.trade-table-wrap {
+  overflow-y: auto;
+  max-height: 300px;
+  border-radius: 0 0 8px 8px;
+}
+table.trade-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.77rem;
+}
+table.trade-tbl thead th {
+  position: sticky;
+  top: 0;
+  background: #0d1117;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+table.trade-tbl tbody td {
+  padding: 5px 10px;
+  border-bottom: 1px solid rgba(48,54,61,0.5);
+  color: var(--text);
+  white-space: nowrap;
+}
+table.trade-tbl tbody tr:hover { background: rgba(255,255,255,0.04); cursor: pointer; }
+table.trade-tbl tbody tr.selected { background: rgba(31,111,235,0.15); }
+.text-bull { color: var(--green); }
+.text-bear { color: var(--red); }
+.text-muted-c { color: var(--muted); }
+
+/* ── TF buttons ── */
+.tf-group {
+  display: flex;
+  gap: 3px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 6px;
+  padding: 3px;
+}
+.tf-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.tf-btn:hover  { color: var(--text); background: rgba(255,255,255,0.06); }
+.tf-btn.active { color: #fff; background: #1f6feb; }
+
+/* ── Toggle switches ── */
+.form-check-input {
+  background-color: var(--border);
+  border-color: var(--border);
+  cursor: pointer;
+}
+.form-check-input:checked { background-color: #1f6feb; border-color: #1f6feb; }
+.form-check-label { font-size: 0.78rem; color: var(--muted); cursor: pointer; }
+
+/* ── Logs ── */
+#logsContainer {
+  background: #0a0e13;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  overflow-y: auto;
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+.log-line { padding: 0; color: var(--text); white-space: pre-wrap; word-break: break-all; }
+.log-line.success { color: var(--green); }
+.log-line.error   { color: var(--red); }
+.log-line.info    { color: var(--blue); }
+.log-line.sep     { color: var(--orange); font-weight: 600; }
+
+/* ── Modal ── */
+.modal-content { background: var(--bg-card); border: 1px solid var(--border); }
+.modal-header { border-bottom: 1px solid var(--border); }
+.modal-footer { border-top: 1px solid var(--border); }
+.modal-title  { font-size: 0.95rem; }
+#gitOutput    { background: #0a0e13; color: var(--text); font-size: 0.78rem; min-height: 60px; white-space: pre-wrap; }
+
+/* ── Status badge ── */
+#runStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+}
+
+/* ── Spinner ── */
+.spinner-border-sm { width: 0.85rem; height: 0.85rem; border-width: 0.15em; }
+
+/* ── Empty state ── */
+.empty-state {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--muted);
+}
+.empty-state i { font-size: 2.5rem; margin-bottom: 0.5rem; display: block; }
+
+/* ── Section headers (progress dividers in params) ── */
+.param-section {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+  margin-top: 0.1rem;
+  margin-bottom: 0.5rem;
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }

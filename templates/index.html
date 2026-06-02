@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tradalgo — EURUSD Backtester</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css"
+        crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+        crossorigin="anonymous">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" crossorigin="anonymous"></script>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+
+<!-- ══════════════════════════════════ NAVBAR ══════════════════════════════════ -->
+<nav class="navbar d-flex align-items-center">
+  <span class="navbar-brand me-3">
+    <i class="bi bi-graph-up-arrow text-primary"></i> Tradalgo
+  </span>
+
+  <div class="nav-tabs-custom flex-grow-1">
+    <button class="tab-btn active" data-tab="accueil">
+      <i class="bi bi-house-fill"></i> Accueil
+    </button>
+    <button class="tab-btn" data-tab="graphiques">
+      <i class="bi bi-bar-chart-fill"></i> Graphiques
+    </button>
+    <button class="tab-btn" data-tab="logs">
+      <i class="bi bi-terminal-fill"></i> Logs
+    </button>
+  </div>
+
+  <div class="d-flex align-items-center gap-2 ms-3">
+    <span id="runStatus" class="text-muted" style="font-size:0.78rem"></span>
+    <button id="btnGitPull" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-cloud-download"></i> Sync Pi
+    </button>
+  </div>
+</nav>
+
+<!-- ═══════════════════════════════ TAB: ACCUEIL ═══════════════════════════════ -->
+<div id="panel-accueil" class="tab-panel container-fluid py-3">
+  <div class="row g-3">
+
+    <!-- ── Configuration ── -->
+    <div class="col-lg-4 col-xl-3">
+      <div class="card h-100">
+        <div class="card-header"><i class="bi bi-sliders"></i> Configuration</div>
+        <div class="card-body" style="overflow-y:auto; max-height:calc(100vh - 120px)">
+          <form id="backtestForm">
+
+            <div class="mb-2">
+              <label class="form-label">Mode stratégie</label>
+              <select class="form-select" name="mode" id="modeSelect">
+                <option value="intraday">Intraday (H1 — SMC+Fib)</option>
+                <option value="swing">Swing (D1 — structure trailing)</option>
+                <option value="mtf" selected>Multi-TF (W1/D1→H4→M15)</option>
+              </select>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label">Source de données</label>
+              <select class="form-select" name="source" id="sourceSelect">
+                <option value="yfinance">yfinance (H1, ~2 ans)</option>
+                <option value="histdata_csv" selected>Histdata CSV</option>
+                <option value="mt4_csv">MT4/MT5 CSV</option>
+                <option value="generic_csv">CSV générique</option>
+              </select>
+            </div>
+
+            <div class="mb-2" id="csvRow">
+              <label class="form-label">Chemin CSV</label>
+              <input type="text" class="form-control" name="csv"
+                     placeholder="data_cache/EURUSD_M1_2021_2024.csv"
+                     value="sample_data/EURUSD_H1_2020_2025.csv">
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col">
+                <label class="form-label">Début</label>
+                <input type="date" class="form-control" name="start" value="2022-01-01">
+              </div>
+              <div class="col">
+                <label class="form-label">Fin</label>
+                <input type="date" class="form-control" name="end" value="2025-01-01">
+              </div>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col">
+                <label class="form-label">Capital ($)</label>
+                <input type="number" class="form-control" name="equity" value="10000">
+              </div>
+              <div class="col">
+                <label class="form-label">Risque (%)</label>
+                <input type="number" class="form-control" name="risk" value="0.01" step="0.001" min="0.001" max="0.1">
+              </div>
+            </div>
+
+            <div class="row g-2 mb-2">
+              <div class="col">
+                <label class="form-label">Spread (pips)</label>
+                <input type="number" class="form-control" name="spread" value="1.5" step="0.1">
+              </div>
+              <div class="col">
+                <label class="form-label">Min R:R</label>
+                <input type="number" class="form-control" name="min_rr" value="2.0" step="0.1">
+              </div>
+            </div>
+
+            <div class="mb-3">
+              <label class="form-label">Seuil impulse OB (×ATR)</label>
+              <input type="number" class="form-control" name="impulse" value="1.5" step="0.1">
+            </div>
+
+            <!-- Intraday-only params -->
+            <div id="intradayParams">
+              <div class="param-section">Paramètres Intraday</div>
+              <div class="row g-2 mb-2">
+                <div class="col">
+                  <label class="form-label">OB lookback (H1)</label>
+                  <input type="number" class="form-control" name="ob_lookback" value="800">
+                </div>
+                <div class="col">
+                  <label class="form-label">Max trades/j</label>
+                  <input type="number" class="form-control" name="max_trades_day" value="2">
+                </div>
+              </div>
+            </div>
+
+            <!-- Swing-only params -->
+            <div id="swingParams">
+              <div class="param-section">Paramètres Swing</div>
+              <div class="row g-2 mb-2">
+                <div class="col">
+                  <label class="form-label">TP backstop (×R)</label>
+                  <input type="number" class="form-control" name="tp_rr" value="6.0">
+                </div>
+                <div class="col">
+                  <label class="form-label">Max hold (jours)</label>
+                  <input type="number" class="form-control" name="max_hold" value="180">
+                </div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Sizing</label>
+                <select class="form-select" name="sizing">
+                  <option value="risk">Risk-based (% équité)</option>
+                  <option value="margin">Margin-based</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- MTF-only params -->
+            <div id="mtfParams">
+              <div class="param-section">Paramètres MTF</div>
+              <div class="row g-2 mb-2">
+                <div class="col">
+                  <label class="form-label">H4 OB lookback</label>
+                  <input type="number" class="form-control" name="h4_ob_lookback" value="200">
+                </div>
+                <div class="col">
+                  <label class="form-label">H4 Fib lookback</label>
+                  <input type="number" class="form-control" name="h4_fib_lookback" value="120">
+                </div>
+              </div>
+              <div class="mb-2">
+                <label class="form-label">Max trades/jour</label>
+                <input type="number" class="form-control" name="max_trades_day" value="3">
+              </div>
+            </div>
+
+            <div class="d-grid mt-3">
+              <button type="submit" class="btn btn-primary" id="btnRun">
+                <i class="bi bi-play-fill"></i> Lancer le backtest
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Résultats ── -->
+    <div class="col-lg-8 col-xl-9">
+
+      <!-- Empty state -->
+      <div id="noResults" class="empty-state">
+        <i class="bi bi-graph-up-arrow"></i>
+        Configure les paramètres et lance un backtest pour voir les résultats.
+      </div>
+
+      <!-- Results panel -->
+      <div id="resultsPanel" hidden>
+        <!-- Metrics grid -->
+        <div class="row g-2 mb-3" id="metricsGrid"></div>
+
+        <!-- Equity curve -->
+        <div class="card mb-3">
+          <div class="card-header"><i class="bi bi-activity"></i> Courbe d'équité</div>
+          <div class="card-body p-0">
+            <div id="equityCurve" style="height:210px"></div>
+          </div>
+        </div>
+
+        <!-- Trade table -->
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <span><i class="bi bi-table"></i> Trades</span>
+            <span id="tradeCount" class="badge" style="background:#21262d; color:#8b949e"></span>
+          </div>
+          <div class="trade-table-wrap">
+            <table class="trade-tbl">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Direction</th>
+                  <th>Entrée</th>
+                  <th>Sortie</th>
+                  <th>SL pips</th>
+                  <th>TP pips</th>
+                  <th>Raison</th>
+                  <th>PnL pips</th>
+                  <th>PnL $</th>
+                  <th>R mult.</th>
+                </tr>
+              </thead>
+              <tbody id="tradeTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <p class="text-muted mt-2" style="font-size:0.75rem">
+          <i class="bi bi-info-circle"></i>
+          Cliquez sur une ligne pour zoomer sur ce trade dans l'onglet Graphiques.
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ TAB: GRAPHIQUES ═══════════════════════════ -->
+<div id="panel-graphiques" class="tab-panel container-fluid py-3" hidden>
+
+  <!-- Toolbar -->
+  <div class="d-flex flex-wrap align-items-center gap-3 mb-3">
+    <div class="tf-group">
+      <button class="tf-btn" data-tf="w1">W1</button>
+      <button class="tf-btn" data-tf="d1">D1</button>
+      <button class="tf-btn" data-tf="h4">H4</button>
+      <button class="tf-btn active" data-tf="h1">H1</button>
+      <button class="tf-btn" data-tf="m15">M15</button>
+    </div>
+
+    <button id="btnLoadChart" class="btn btn-sm btn-primary">
+      <i class="bi bi-arrow-clockwise"></i> Charger le graphique
+    </button>
+
+    <div class="d-flex gap-3 align-items-center">
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" id="showMitigated" checked>
+        <label class="form-check-label" for="showMitigated">OBs mitigés</label>
+      </div>
+      <div class="form-check form-switch mb-0">
+        <input class="form-check-input" type="checkbox" id="showSlTp" checked>
+        <label class="form-check-label" for="showSlTp">SL / TP</label>
+      </div>
+    </div>
+
+    <span id="chartStatus" class="text-muted ms-auto" style="font-size:0.78rem"></span>
+  </div>
+
+  <!-- Legend -->
+  <div class="d-flex gap-3 mb-2" style="font-size:0.72rem; color:#8b949e">
+    <span><span style="display:inline-block;width:12px;height:12px;background:rgba(63,185,80,0.3);border:1px solid #3fb950;border-radius:2px;vertical-align:middle"></span> OB haussier actif</span>
+    <span><span style="display:inline-block;width:12px;height:12px;background:rgba(248,81,73,0.3);border:1px solid #f85149;border-radius:2px;vertical-align:middle"></span> OB baissier actif</span>
+    <span><span style="display:inline-block;width:12px;height:12px;background:rgba(63,185,80,0.06);border:1px dashed #3fb950;border-radius:2px;vertical-align:middle"></span> Mitigé</span>
+    <span>▲ Entrée long &nbsp; ▼ Entrée short &nbsp; ✗ Sortie</span>
+    <span style="color:#3fb950">— — TP</span>
+    <span style="color:#f85149">— — SL</span>
+  </div>
+
+  <!-- Chart -->
+  <div id="mainChart" style="height:calc(100vh - 195px); border-radius:8px; overflow:hidden"></div>
+</div>
+
+<!-- ═════════════════════════════════ TAB: LOGS ════════════════════════════════ -->
+<div id="panel-logs" class="tab-panel container-fluid py-3" hidden>
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <h6 class="mb-0" style="color:#8b949e">
+      <i class="bi bi-terminal-fill"></i> Console / Logs
+    </h6>
+    <div class="d-flex gap-2">
+      <button class="btn btn-sm btn-outline-secondary" id="btnClearLogs">
+        <i class="bi bi-trash"></i> Effacer
+      </button>
+      <button class="btn btn-sm btn-outline-secondary" id="btnScrollBottom">
+        <i class="bi bi-chevron-double-down"></i> Bas
+      </button>
+    </div>
+  </div>
+  <div id="logsContainer" style="height:calc(100vh - 165px)">
+    <div id="logsContent"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════ MODAL: GIT ════════════════════════════════ -->
+<div class="modal fade" id="gitModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">
+          <i class="bi bi-cloud-download"></i> Sync Pi
+          <span id="gitBadge" class="badge bg-secondary ms-2">…</span>
+        </h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">
+          Exécute <code>git pull origin claude/eurusd-trading-algo-T7p4x</code>
+          dans le répertoire du projet sur ce serveur (Pi).
+        </p>
+        <pre id="gitOutput"></pre>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Fermer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
+<script src="/static/js/charts.js"></script>
+<script src="/static/js/app.js"></script>
+</body>
+</html>
