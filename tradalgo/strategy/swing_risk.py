@@ -87,9 +87,9 @@ def calculate_swing_setup(
 
     # ── Position sizing ───────────────────────────────────────────────────
     if sizing_mode == "margin":
-        # Margin-based: commit margin_pct of equity at the given leverage.
-        notional = margin_pct * account_equity * leverage
-        raw_lot  = notional / (UNITS_PER_LOT * effective_entry)
+        # 0.01 lot = 1,000 EUR base units; required margin = 1,000 / leverage
+        # → lot = (margin_pct × equity × leverage) / UNITS_PER_LOT
+        raw_lot = (margin_pct * account_equity * leverage) / UNITS_PER_LOT
     else:
         # Risk-based: size so the SL distance risks risk_pct of equity.
         target_risk_usd = account_equity * risk_pct
