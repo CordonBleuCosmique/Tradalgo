@@ -167,11 +167,22 @@ def save_histdata_csv(df: pd.DataFrame, path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Download EURUSD Histdata.com → H1 CSV")
+    parser = argparse.ArgumentParser(
+        description="Download EURUSD M1 from Histdata.com → save M1 CSV (for MTF) or H1 CSV",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Timeframe:
+  --tf m1   Save raw M1 data  → use with --mode mtf  (loader auto-resamples to M15+H1)
+  --tf h1   Save H1 data      → use with --mode intraday / swing  (default)
+        """,
+    )
     parser.add_argument("--pair",   default="eurusd")
-    parser.add_argument("--start",  type=int, default=2019)
+    parser.add_argument("--start",  type=int, default=2021)
     parser.add_argument("--end",    type=int, default=2024)
-    parser.add_argument("--output", default="sample_data/EURUSD_H1_real.csv")
+    parser.add_argument("--tf",     default="h1", choices=["m1", "h1"],
+                        help="Output timeframe: m1 (raw, for MTF mode) or h1 (default)")
+    parser.add_argument("--output", default=None,
+                        help="Output CSV path (auto-named if omitted)")
     args = parser.parse_args()
 
     if DOWNLOAD_FN is None:
@@ -179,41 +190,58 @@ def main() -> None:
         print("  pip install histdata")
         sys.exit(1)
 
+    if args.output is None:
+        tf_label = args.tf.upper()
+        args.output = f"data_cache/EURUSD_{tf_label}_{args.start}_{args.end}.csv"
+
     years = list(range(args.start, args.end + 1))
-    print(f"Téléchargement {args.pair.upper()} H1 — {years[0]} → {years[-1]}")
+    print(f"Téléchargement {args.pair.upper()} M1→{args.tf.upper()} — {years[0]} → {years[-1]}")
     print(f"Sortie : {args.output}\n")
 
-    all_frames: list[pd.DataFrame] = []
+    all_m1: list[pd.DataFrame] = []
     with tempfile.TemporaryDirectory() as tmp:
         for year in years:
             df_m1 = download_year(args.pair, year, Path(tmp))
             if df_m1 is not None:
-                df_h1 = resample_to_h1(df_m1)
-                all_frames.append(df_h1)
-                print(f"         → {len(df_h1):,} barres H1")
+                all_m1.append(df_m1)
 
-    if not all_frames:
+    if not all_m1:
         print("\nAucune donnée téléchargée. Voir ci-dessus pour les erreurs.")
         sys.exit(1)
 
-    merged = pd.concat(all_frames).sort_index()
-    merged = merged[~merged.index.duplicated(keep="first")]
+    m1_merged = pd.concat(all_m1).sort_index()
+    m1_merged = m1_merged[~m1_merged.index.duplicated(keep="first")]
+
+    if args.tf == "h1":
+        out_df = resample_to_h1(m1_merged)
+        tf_label = "H1"
+    else:
+        out_df = m1_merged[m1_merged.index.dayofweek < 5]
+        tf_label = "M1"
+
     out = Path(args.output)
-    save_histdata_csv(merged, out)
+    save_histdata_csv(out_df, out)
 
     size_mb  = out.stat().st_size / 1_048_576
-    atr_pips = (merged["High"] - merged["Low"]).mean() / 0.0001
+    atr_pips = (out_df["High"] - out_df["Low"]).mean() / 0.0001
     print(f"\n{'='*52}")
-    print(f"  Fichier   : {out}")
-    print(f"  Barres H1 : {len(merged):,}")
-    print(f"  Période   : {merged.index[0].date()} → {merged.index[-1].date()}")
-    print(f"  ATR moyen : {atr_pips:.1f} pips")
-    print(f"  Taille    : {size_mb:.1f} MB")
+    print(f"  Fichier      : {out}")
+    print(f"  Barres {tf_label:<4}  : {len(out_df):,}")
+    print(f"  Période      : {out_df.index[0].date()} → {out_df.index[-1].date()}")
+    print(f"  ATR moyen    : {atr_pips:.1f} pips")
+    print(f"  Taille       : {size_mb:.1f} MB")
     print(f"{'='*52}")
-    print(f"\nLancer le backtest :")
-    print(f"  python run_backtest.py --source histdata_csv \\")
-    print(f"      --csv {out} \\")
-    print(f"      --start {args.start}-01-01 --end {args.end + 1}-01-01 --equity 10000")
+
+    if args.tf == "m1":
+        print(f"\nLancer le backtest MTF (M15 auto-resampling) :")
+        print(f"  python run_backtest.py --mode mtf --source histdata_csv \\")
+        print(f"      --csv {out} \\")
+        print(f"      --start {args.start}-01-01 --end {args.end}-12-31 --equity 10000")
+    else:
+        print(f"\nLancer le backtest intraday / swing :")
+        print(f"  python run_backtest.py --source histdata_csv \\")
+        print(f"      --csv {out} \\")
+        print(f"      --start {args.start}-01-01 --end {args.end}-12-31 --equity 10000")
 
 
 if __name__ == "__main__":
