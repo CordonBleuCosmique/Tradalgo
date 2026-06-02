@@ -236,25 +236,50 @@ def _compute_obs_with_mitigation(
     atr_s: pd.Series,
     impulse_bars: int,
     impulse_threshold: float,
+    chart_start: Optional[pd.Timestamp] = None,
+    max_obs: int = 400,
 ) -> list[dict]:
-    """Detect OBs and simulate mitigation chronologically."""
+    """
+    Detect OBs, simulate full mitigation history, then return only the OBs
+    that formed within the chart window (chart_start - 3 months).
+
+    Each OB rectangle ends at its mitigation bar — not at end of chart —
+    so mitigated OBs appear as short, historically accurate segments.
+    """
     obs = detect_order_blocks(df, atr_s, impulse_bars, impulse_threshold)
-    closes = df["Close"].values
     for i in range(len(df)):
         bar = df.iloc[i]
         for _dir in ("bullish", "bearish"):
             update_mitigation(obs, bar, _dir, i)
 
+    # Only show OBs that formed ≥ 3 months before chart_start (skip deep warmup)
+    if chart_start is not None:
+        cutoff = chart_start - pd.DateOffset(months=3)
+        if cutoff.tzinfo is None:
+            cutoff = cutoff.tz_localize("UTC")
+        obs = [ob for ob in obs if df.index[ob.bar_idx] >= cutoff]
+
+    # Keep only the most recent max_obs (avoids JSON bloat on H1/M15)
+    if len(obs) > max_obs:
+        obs = sorted(obs, key=lambda o: o.bar_idx, reverse=True)[:max_obs]
+
+    last_ts = df.index[-1].isoformat()
     out = []
     for ob in obs:
+        if ob.mitigation_bar_idx >= 0:
+            mit_idx = min(ob.mitigation_bar_idx, len(df) - 1)
+            end_ts = df.index[mit_idx].isoformat()
+        else:
+            end_ts = last_ts
+
         out.append({
             "direction": ob.direction,
-            "zone_low": round(ob.zone_low, 5),
+            "zone_low":  round(ob.zone_low,  5),
             "zone_high": round(ob.zone_high, 5),
             "start_time": df.index[ob.bar_idx].isoformat(),
-            "conf_time": df.index[min(ob.confirmation_bar_idx, len(df) - 1)].isoformat(),
-            "end_time": df.index[-1].isoformat(),
-            "mitigated": ob.is_mitigated,
+            "conf_time":  df.index[min(ob.confirmation_bar_idx, len(df) - 1)].isoformat(),
+            "end_time":   end_ts,
+            "mitigated":  ob.is_mitigated,
         })
     return out
 
@@ -351,8 +376,20 @@ def chart_data(tf: str):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-    impulse_bars = int(params.get("h4_impulse_bars", 2) if tf == "h4" else params.get("impulse_bars", 3))
-    impulse_thr = float(params.get("impulse", 1.5))
+    impulse_thr  = float(params.get("impulse", 1.5))
+    chart_start  = pd.Timestamp(params.get("start", "2022-01-01")).tz_localize("UTC")
+
+    # Per-TF config: (impulse_bars, max_obs, max_ohlcv_bars)
+    TF_CFG = {
+        "w1":  (2, 150,  None),
+        "d1":  (3, 200,  None),
+        "h4":  (2, 300,  None),
+        "h1":  (3, 500,  8000),
+        "m15": (3, 600,  5000),
+    }
+    if tf not in TF_CFG:
+        return jsonify({"error": f"TF inconnu: {tf}"}), 400
+    imp_bars, max_obs, max_bars = TF_CFG[tf]
 
     try:
         if tf == "w1":
@@ -364,7 +401,7 @@ def chart_data(tf: str):
                     {"name": "EMA20", "color": "#00bfff", "values": _series_to_list(_ema(df["Close"], 20))},
                     {"name": "EMA50", "color": "#ff8c00", "values": _series_to_list(_ema(df["Close"], 50))},
                 ],
-                "obs": _compute_obs_with_mitigation(df, atr_s, 2, 1.5),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
                 "trades": trades,
             })
 
@@ -377,7 +414,7 @@ def chart_data(tf: str):
                     {"name": "EMA50", "color": "#00bfff", "values": _series_to_list(_ema(df["Close"], 50))},
                     {"name": "EMA200", "color": "#ff8c00", "values": _series_to_list(_ema(df["Close"], 200))},
                 ],
-                "obs": _compute_obs_with_mitigation(df, atr_s, 3, impulse_thr),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
                 "trades": trades,
             })
 
@@ -387,7 +424,7 @@ def chart_data(tf: str):
             return jsonify({
                 "tf": "H4", "ohlcv": _ohlcv_to_list(df),
                 "emas": [],
-                "obs": _compute_obs_with_mitigation(df, atr_s, impulse_bars, impulse_thr),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
                 "trades": trades,
             })
 
@@ -395,12 +432,12 @@ def chart_data(tf: str):
             df = mkt["h1"]
             atr_s = _atr(df, 14)
             return jsonify({
-                "tf": "H1", "ohlcv": _ohlcv_to_list(df),
+                "tf": "H1", "ohlcv": _ohlcv_to_list(df, max_bars=max_bars),
                 "emas": [
                     {"name": "EMA50", "color": "#00bfff", "values": _series_to_list(_ema(df["Close"], 50))},
                     {"name": "EMA200", "color": "#ff8c00", "values": _series_to_list(_ema(df["Close"], 200))},
                 ],
-                "obs": _compute_obs_with_mitigation(df, atr_s, 3, impulse_thr),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
                 "trades": trades,
             })
 
@@ -410,9 +447,9 @@ def chart_data(tf: str):
                 return jsonify({"error": "Pas de données M15 (nécessite source M1 CSV)"}), 404
             atr_s = _atr(df, 14)
             return jsonify({
-                "tf": "M15", "ohlcv": _ohlcv_to_list(df, max_bars=5000),
+                "tf": "M15", "ohlcv": _ohlcv_to_list(df, max_bars=max_bars),
                 "emas": [],
-                "obs": _compute_obs_with_mitigation(df, atr_s, 3, impulse_thr),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
                 "trades": trades,
             })
 

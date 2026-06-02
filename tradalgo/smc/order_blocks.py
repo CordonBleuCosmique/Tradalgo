@@ -13,6 +13,7 @@ class OrderBlock:
     zone_high: float
     confirmation_bar_idx: int   # last bar of the impulse (must be < current_idx for visibility)
     is_mitigated: bool = False
+    mitigation_bar_idx: int = -1  # bar index at which price closed through the zone
 
 
 def detect_order_blocks(
@@ -100,5 +101,7 @@ def update_mitigation(
             continue
         if direction == "bullish" and close < ob.zone_low:
             ob.is_mitigated = True
+            ob.mitigation_bar_idx = bar_idx
         elif direction == "bearish" and close > ob.zone_high:
             ob.is_mitigated = True
+            ob.mitigation_bar_idx = bar_idx
