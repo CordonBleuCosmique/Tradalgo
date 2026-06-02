@@ -238,6 +238,7 @@ def _compute_obs_with_mitigation(
     impulse_threshold: float,
     chart_start: Optional[pd.Timestamp] = None,
     max_obs: int = 400,
+    max_age_months: int = 24,
 ) -> list[dict]:
     """
     Detect OBs, simulate full mitigation history, then return only the OBs
@@ -252,7 +253,15 @@ def _compute_obs_with_mitigation(
         for _dir in ("bullish", "bearish"):
             update_mitigation(obs, bar, _dir, i)
 
-    # Only show OBs that formed ≥ 3 months before chart_start (skip deep warmup)
+    # Age filter: OBs older than max_age_months from the last bar are irrelevant
+    # (e.g. bearish OBs at 1.22 from 2021 when price is now at 1.08)
+    last_bar_ts = df.index[-1]
+    age_cutoff = last_bar_ts - pd.DateOffset(months=max_age_months)
+    if age_cutoff.tzinfo is None:
+        age_cutoff = age_cutoff.tz_localize("UTC")
+    obs = [ob for ob in obs if df.index[ob.bar_idx] >= age_cutoff]
+
+    # Also skip deep warmup OBs that formed before the backtest start window
     if chart_start is not None:
         cutoff = chart_start - pd.DateOffset(months=3)
         if cutoff.tzinfo is None:
@@ -379,17 +388,17 @@ def chart_data(tf: str):
     impulse_thr  = float(params.get("impulse", 1.5))
     chart_start  = pd.Timestamp(params.get("start", "2022-01-01")).tz_localize("UTC")
 
-    # Per-TF config: (impulse_bars, max_obs, max_ohlcv_bars)
+    # Per-TF config: (impulse_bars, max_obs, max_ohlcv_bars, max_age_months)
     TF_CFG = {
-        "w1":  (2, 150,  None),
-        "d1":  (3, 200,  None),
-        "h4":  (2, 300,  None),
-        "h1":  (3, 500,  8000),
-        "m15": (3, 600,  5000),
+        "w1":  (2, 150,  None, 48),
+        "d1":  (3, 200,  None, 24),
+        "h4":  (3, 300,  None, 12),   # impulse_bars 3 (was 2) — reduces false OBs
+        "h1":  (3, 500,  8000,  6),
+        "m15": (3, 600,  5000,  3),
     }
     if tf not in TF_CFG:
         return jsonify({"error": f"TF inconnu: {tf}"}), 400
-    imp_bars, max_obs, max_bars = TF_CFG[tf]
+    imp_bars, max_obs, max_bars, max_age = TF_CFG[tf]
 
     try:
         if tf == "w1":
@@ -401,7 +410,7 @@ def chart_data(tf: str):
                     {"name": "EMA20", "color": "#00bfff", "values": _series_to_list(_ema(df["Close"], 20))},
                     {"name": "EMA50", "color": "#ff8c00", "values": _series_to_list(_ema(df["Close"], 50))},
                 ],
-                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs, max_age),
                 "trades": trades,
             })
 
@@ -414,7 +423,7 @@ def chart_data(tf: str):
                     {"name": "EMA50", "color": "#00bfff", "values": _series_to_list(_ema(df["Close"], 50))},
                     {"name": "EMA200", "color": "#ff8c00", "values": _series_to_list(_ema(df["Close"], 200))},
                 ],
-                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs, max_age),
                 "trades": trades,
             })
 
@@ -424,7 +433,7 @@ def chart_data(tf: str):
             return jsonify({
                 "tf": "H4", "ohlcv": _ohlcv_to_list(df),
                 "emas": [],
-                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs, max_age),
                 "trades": trades,
             })
 
@@ -437,7 +446,7 @@ def chart_data(tf: str):
                     {"name": "EMA50", "color": "#00bfff", "values": _series_to_list(_ema(df["Close"], 50))},
                     {"name": "EMA200", "color": "#ff8c00", "values": _series_to_list(_ema(df["Close"], 200))},
                 ],
-                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs, max_age),
                 "trades": trades,
             })
 
@@ -449,7 +458,7 @@ def chart_data(tf: str):
             return jsonify({
                 "tf": "M15", "ohlcv": _ohlcv_to_list(df, max_bars=max_bars),
                 "emas": [],
-                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs),
+                "obs": _compute_obs_with_mitigation(df, atr_s, imp_bars, impulse_thr, chart_start, max_obs, max_age),
                 "trades": trades,
             })
 

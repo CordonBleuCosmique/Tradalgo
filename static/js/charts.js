@@ -10,6 +10,10 @@ const OB_BEAR_FILL   = "rgba(248,81,73,0.18)";
 const OB_BULL_FADED  = "rgba(63,185,80,0.04)";
 const OB_BEAR_FADED  = "rgba(248,81,73,0.04)";
 
+/* Trade rectangle colours — slightly more opaque than OBs */
+const TRADE_GREEN = "rgba(0,90,35,0.42)";
+const TRADE_RED   = "rgba(110,0,20,0.42)";
+
 function renderChart(data) {
   _chartData = data;
   _drawChart();
@@ -51,10 +55,9 @@ function _drawChart() {
     hoverinfo: "skip",
   }));
 
-  /* ── 3. Trade markers ── */
+  /* ── 3. Entry markers only (exit is implicit in the rectangle's right edge) ── */
   const trades = data.trades || [];
   const entryX = [], entryY = [], entrySymbol = [], entryColor = [], entryText = [];
-  const exitX  = [], exitY  = [], exitColor = [];
 
   trades.forEach(t => {
     if (!t.entry_time) return;
@@ -62,36 +65,29 @@ function _drawChart() {
     entryY.push(t.entry_price);
     entrySymbol.push(t.direction === "bullish" ? "triangle-up" : "triangle-down");
     entryColor.push(t.direction === "bullish" ? BULL_COLOR : BEAR_COLOR);
-    entryText.push(`#${t.id} ${t.direction.toUpperCase()}<br>R:R ${t.rr_ratio} | ${t.exit_reason}<br>PnL: ${t.pnl_pips} pips / ${t.pnl_usd}$`);
-    if (t.exit_time && t.exit_price) {
-      exitX.push(t.exit_time);
-      exitY.push(t.exit_price);
-      exitColor.push(
-        t.exit_reason === "tp_hit"       ? BULL_COLOR :
-        t.exit_reason === "sl_hit"       ? BEAR_COLOR : "#888"
-      );
-    }
+    entryText.push(
+      `#${t.id} ${t.direction === "bullish" ? "LONG" : "SHORT"}<br>` +
+      `Entrée: ${t.entry_price}<br>` +
+      `SL: ${t.stop_loss}  TP: ${t.take_profit}<br>` +
+      `R:R ${t.rr_ratio} | ${t.exit_reason}<br>` +
+      `PnL: ${t.pnl_pips} pips / ${t.pnl_usd}$`
+    );
   });
 
   const entryTrace = {
     type: "scatter", mode: "markers", name: "Entrées",
     x: entryX, y: entryY,
-    marker: { symbol: entrySymbol, color: entryColor, size: 11, line: { color: "#fff", width: 1 } },
+    marker: { symbol: entrySymbol, color: entryColor, size: 9, line: { color: "#fff", width: 1 } },
     text: entryText, hovertemplate: "%{text}<extra></extra>",
   };
-  const exitTrace = {
-    type: "scatter", mode: "markers", name: "Sorties",
-    x: exitX, y: exitY,
-    marker: { symbol: "x", color: exitColor, size: 8 },
-    hoverinfo: "skip",
-  };
 
-  const traces = [candles, ...emaTraces, entryTrace, exitTrace];
+  const traces = [candles, ...emaTraces, entryTrace];
 
-  /* ── 4. Shapes (OBs + SL/TP) ── */
+  /* ── 4. Shapes ── */
   const shapes = [];
   const annotations = [];
 
+  /* 4a. Order Block rectangles */
   (data.obs || []).forEach(ob => {
     if (ob.mitigated && !showMit) return;
     const isBull = ob.direction === "bullish";
@@ -120,22 +116,80 @@ function _drawChart() {
     }
   });
 
+  /* 4b. Trade SL/TP rectangles — bi-colour format
+   *
+   * LONG:   green above entry (profit), red below entry (loss)
+   * SHORT:  red above entry (loss),  green below entry (profit)
+   *
+   * White entry line splits the two zones.
+   * "TP" label at profit corner, "SL" at loss corner.
+   */
   if (showSLTP) {
     trades.forEach(t => {
-      if (!t.entry_time) return;
-      const x1 = t.exit_time || lastTime;
-      shapes.push(
-        { type: "line", xref: "x", yref: "y",
-          x0: t.entry_time, x1, y0: t.stop_loss, y1: t.stop_loss,
-          line: { color: BEAR_COLOR, width: 1, dash: "dash" } },
-        { type: "line", xref: "x", yref: "y",
-          x0: t.entry_time, x1, y0: t.take_profit, y1: t.take_profit,
-          line: { color: BULL_COLOR, width: 1, dash: "dash" } },
-      );
+      if (!t.entry_time || t.stop_loss == null || t.take_profit == null) return;
+      const x1     = t.exit_time || lastTime;
+      const isLong = t.direction === "bullish";
+
+      const profitLow  = isLong ? t.entry_price : t.take_profit;
+      const profitHigh = isLong ? t.take_profit : t.entry_price;
+      const lossLow    = isLong ? t.stop_loss   : t.entry_price;
+      const lossHigh   = isLong ? t.entry_price : t.stop_loss;
+
+      /* Profit zone (green) */
+      shapes.push({
+        type: "rect", xref: "x", yref: "y",
+        x0: t.entry_time, x1,
+        y0: profitLow, y1: profitHigh,
+        fillcolor: TRADE_GREEN,
+        line: { width: 0 },
+        layer: "below",
+      });
+
+      /* Loss zone (red) */
+      shapes.push({
+        type: "rect", xref: "x", yref: "y",
+        x0: t.entry_time, x1,
+        y0: lossLow, y1: lossHigh,
+        fillcolor: TRADE_RED,
+        line: { width: 0 },
+        layer: "below",
+      });
+
+      /* White entry line */
+      shapes.push({
+        type: "line", xref: "x", yref: "y",
+        x0: t.entry_time, x1,
+        y0: t.entry_price, y1: t.entry_price,
+        line: { color: "rgba(255,255,255,0.75)", width: 1 },
+      });
+
+      /* TP label — top-right of profit zone */
+      annotations.push({
+        x: x1, y: profitHigh,
+        xref: "x", yref: "y",
+        text: "TP",
+        showarrow: false,
+        font: { size: 8, color: BULL_COLOR },
+        xanchor: "right",
+        yanchor: isLong ? "top" : "bottom",
+        bgcolor: "rgba(0,0,0,0.55)", borderpad: 1,
+      });
+
+      /* SL label — bottom-right of loss zone */
+      annotations.push({
+        x: x1, y: isLong ? t.stop_loss : t.stop_loss,
+        xref: "x", yref: "y",
+        text: "SL",
+        showarrow: false,
+        font: { size: 8, color: BEAR_COLOR },
+        xanchor: "right",
+        yanchor: isLong ? "bottom" : "top",
+        bgcolor: "rgba(0,0,0,0.55)", borderpad: 1,
+      });
     });
   }
 
-  /* ── 5. Highlight selected trade ── */
+  /* ── 5. Highlight selected trade (column highlight) ── */
   if (_selectedTradeId !== null) {
     const tr = trades.find(t => t.id === _selectedTradeId);
     if (tr && tr.entry_time) {
