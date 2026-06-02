@@ -49,8 +49,8 @@ class MTFConfig:
     # H4 signal layer
     h4_impulse_bars: int = 2
     h4_impulse_threshold: float = 1.5
-    h4_ob_lookback: int = 60    # H4 bars  (~10 days)
-    h4_fib_lookback: int = 60   # H4 bars for Fibonacci anchor
+    h4_ob_lookback: int = 200   # H4 bars (~33 days — equivalent to 800 H1 bars)
+    h4_fib_lookback: int = 120  # H4 bars for Fibonacci anchor (~20 days)
 
     # Execution layer (M15 when available, else H1 fallback)
     max_trades_per_day: int = 3
@@ -174,7 +174,7 @@ class MTFEngine:
                 for j in range(last_h4_mitigated + 1, h4_idx + 1):
                     h4_bar = h4.iloc[j]
                     for _dir in ("bullish", "bearish"):
-                        update_mitigation(all_h4_obs, h4_bar, _dir)
+                        update_mitigation(all_h4_obs, h4_bar, _dir, j)
                 last_h4_mitigated = h4_idx
 
             if self.portfolio.open_trade is not None:
@@ -231,9 +231,9 @@ class MTFEngine:
                 self.portfolio.close(t.take_profit, ts, "tp_hit")
 
     def _check_eod_close(self, bar: pd.Series, ts: pd.Timestamp) -> None:
-        is_friday_close = ts.weekday() == 4 and ts.hour >= 20
-        if is_friday_close or ts.hour >= self.cfg.eod_close_hour_utc:
-            self.portfolio.close(bar["Close"], ts, "eod_close")
+        # MTF strategy holds across days — only close on Friday to avoid weekend gap risk.
+        if ts.weekday() == 4 and ts.hour >= self.cfg.eod_close_hour_utc:
+            self.portfolio.close(bar["Close"], ts, "friday_close")
 
     # ── Entry ──────────────────────────────────────────────────────────────
 
@@ -312,7 +312,10 @@ class MTFEngine:
         if signal is None:
             return False
 
-        # Gate 8: risk setup (SL sized on H1 ATR — more robust than exec-TF ATR)
+        # Gate 8: risk setup.
+        # SL is anchored to the H4 Fibonacci zone boundary + 0.5×H4 ATR buffer.
+        # Using H4 ATR (the signal TF) gives a SL appropriate for H4-scale analysis;
+        # H1 ATR is ~4× too tight and leads to excessive noise-induced SL hits.
         if h1_idx < 0:
             return False
         h1_atr_val = float(h1_atr.iloc[h1_idx])
@@ -330,7 +333,7 @@ class MTFEngine:
             direction=direction,
             entry_price=signal.entry_price,
             ob=confluence.ob,
-            atr=h1_atr_val,
+            atr=h4_atr_val,   # H4 ATR: SL wide enough to survive H1 noise
             liquidity_levels=liq_levels,
             account_equity=self.portfolio.equity,
             zone_low=confluence.low,

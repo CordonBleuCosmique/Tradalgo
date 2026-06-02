@@ -80,15 +80,23 @@ def detect_order_blocks(
     return obs
 
 
-def update_mitigation(obs: list[OrderBlock], bar: pd.Series, direction: str) -> None:
+def update_mitigation(
+    obs: list[OrderBlock], bar: pd.Series, direction: str, bar_idx: int
+) -> None:
     """
     Mark OBs as mitigated per ICT rules:
     - Bullish OB: mitigated when the bar CLOSES below zone_low (wick alone is not enough)
     - Bearish OB: mitigated when the bar CLOSES above zone_high
+
+    bar_idx must be the integer position of `bar` in the source DataFrame.
+    OBs whose confirmation_bar_idx >= bar_idx are skipped — they did not exist yet
+    and must not be retroactively mitigated by bars that preceded their formation.
     """
     close = bar["Close"]
     for ob in obs:
         if ob.is_mitigated or ob.direction != direction:
+            continue
+        if bar_idx <= ob.confirmation_bar_idx:
             continue
         if direction == "bullish" and close < ob.zone_low:
             ob.is_mitigated = True

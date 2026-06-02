@@ -160,10 +160,10 @@ def main() -> None:
     p.add_argument("--leverage",     type=float, default=30.0,
                    help="[swing] Leverage for margin sizing (default 30)")
     # ── MTF-mode params ──
-    p.add_argument("--h4-ob-lookback",   type=int,   default=60,
-                   help="[mtf] H4 OB lookback in H4 bars (default 60 ≈ 10 days)")
-    p.add_argument("--h4-fib-lookback",  type=int,   default=60,
-                   help="[mtf] H4 Fibonacci anchor lookback in H4 bars (default 60)")
+    p.add_argument("--h4-ob-lookback",   type=int,   default=200,
+                   help="[mtf] H4 OB lookback in H4 bars (default 200 ≈ 33 days)")
+    p.add_argument("--h4-fib-lookback",  type=int,   default=120,
+                   help="[mtf] H4 Fibonacci anchor lookback in H4 bars (default 120)")
     p.add_argument("--h4-impulse-bars",  type=int,   default=2,
                    help="[mtf] H4 OB impulse confirmation bars (default 2)")
     # ── Walk-forward ──

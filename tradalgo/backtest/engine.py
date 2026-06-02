@@ -111,7 +111,7 @@ class BacktestEngine:
 
             # Update OB mitigation on every bar (both directions)
             for _dir in ("bullish", "bearish"):
-                update_mitigation(all_obs, bar, _dir)
+                update_mitigation(all_obs, bar, _dir, loc_i)
 
             # --- Check exit for open position first ---
             if self.portfolio.open_trade is not None:

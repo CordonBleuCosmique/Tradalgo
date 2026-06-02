@@ -118,7 +118,7 @@ class SwingEngine:
                 break
 
             for _dir in ("bullish", "bearish"):
-                update_mitigation(all_obs, bar, _dir)
+                update_mitigation(all_obs, bar, _dir, loc_i)
 
             if self.portfolio.open_trade is not None:
                 self._manage_open(d1, d1_swings, d1_atr, loc_i)
