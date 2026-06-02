@@ -118,6 +118,18 @@ function displayResults(data) {
   document.getElementById("noResults").hidden = true;
   document.getElementById("resultsPanel").hidden = false;
 
+  /* Show inline download buttons if this result has a bt_id */
+  const dlRow = document.getElementById("dlCurrentBt");
+  if (data.bt_id) {
+    dlRow.hidden = false;
+    ["Csv", "Png", "Zip"].forEach(t => {
+      document.getElementById("btnDl" + t + "Current").onclick =
+        () => { window.location.href = `/api/download/${data.bt_id}/${t.toLowerCase()}`; };
+    });
+  } else {
+    dlRow.hidden = true;
+  }
+
   const m = data.metrics;
 
   /* Metrics grid */
