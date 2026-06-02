@@ -99,9 +99,11 @@ def _run_mtf(args, ts: str) -> None:
         cache_dir=args.cache,
         force_download=args.no_cache,
     )
-    print(f"MTF backtest (W1/D1→H4→H1): {args.start} → {args.end}  |  "
+    print(f"MTF backtest: {args.start} → {args.end}  |  "
           f"Equity: ${args.equity:,.0f}  |  Source: {args.source}")
     result  = MTFEngine(cfg).run()
+    print(f"  Execution TF     : {result.exec_tf}  "
+          f"({'M15 from M1 CSV' if result.exec_tf == 'M15' else 'H1 fallback — no M1 data'})")
     metrics = compute_metrics(result.trades, result.equity_curve, args.equity)
     _print_metrics(metrics, args.equity)
 
@@ -109,7 +111,7 @@ def _run_mtf(args, ts: str) -> None:
     chart_path  = f"{args.output}/mtf_equity_{ts}.png"
     write_trade_log(result.trades, trades_path)
     plot_equity_curve(result.equity_curve, chart_path,
-                      title="EURUSD MTF (W1/D1→H4→H1) — Backtest")
+                      title=f"EURUSD MTF W1/D1→H4→{result.exec_tf} — Backtest")
     print(f"\nTrade log  → {trades_path}")
     print(f"Chart      → {chart_path}")
 

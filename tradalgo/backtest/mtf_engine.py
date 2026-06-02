@@ -52,8 +52,8 @@ class MTFConfig:
     h4_ob_lookback: int = 60    # H4 bars  (~10 days)
     h4_fib_lookback: int = 60   # H4 bars for Fibonacci anchor
 
-    # H1 execution layer
-    max_trades_per_day: int = 2
+    # Execution layer (M15 when available, else H1 fallback)
+    max_trades_per_day: int = 3
     eod_close_hour_utc: int = 20
 
     output_dir: str = "output"
@@ -66,22 +66,26 @@ class MTFResult:
     trades: list[TradeRecord]
     equity_curve: pd.Series
     config: MTFConfig
+    exec_tf: str   # "M15" or "H1" — which TF was used for execution
 
 
 class MTFEngine:
     """
-    Multi-timeframe engine (W1/D1 → H4 signal → H1 execution).
+    Multi-timeframe engine.
 
-    Timeframe cascade:
-      W1 / D1 : macro bias — direction gate only
-      H4      : Order Block + Fibonacci golden-zone confluence (signal TF)
-      H1      : entry trigger — engulfing / pin bar / momentum close inside H4 zone
+    Full cascade (when M1 CSV is provided):
+      W1 / D1  → macro bias
+      H4       → Order Block + Fibonacci confluence (signal TF)
+      M15      → entry trigger — engulfing / pin / momentum close inside H4 zone
 
-    No look-ahead:
-      • H4 bars consumed only after they fully close (open_time + 4 h ≤ current H1 ts)
-      • H4 OB mitigation updated bar-by-bar as new H4 closes arrive
-      • D1 trend via backward merge (get_trend_at_h1_bar)
-      • W1 bias via backward lookup requiring full week closed
+    Fallback (with H1 CSV):
+      W1 / D1 → H4 → H1 entry trigger (same logic, coarser granularity)
+
+    No look-ahead guarantees:
+      • H4 bars consumed only after open_time + 4 h ≤ current bar timestamp
+      • H4 OB mitigation updated lazily bar-by-bar
+      • D1 / W1 trend via backward timestamp lookup
+      • Entry SL sized on H1 ATR (robust vs M15 noise)
     """
 
     def __init__(self, config: MTFConfig):
@@ -104,12 +108,22 @@ class MTFEngine:
         if h1.empty:
             raise ValueError("H1 data is empty after preprocessing.")
 
-        # H4 data — resampled from H1 (no network call needed)
+        # Execution TF: M15 (from M1 source) or H1 fallback
+        if mkt.m15 is not None and not mkt.m15.empty:
+            exec_df = mkt.m15
+            exec_tf = "M15"
+            exec_bar_minutes = 15
+        else:
+            exec_df = h1
+            exec_tf = "H1"
+            exec_bar_minutes = 60
+
+        # H4 — resampled from H1
         h4 = h1.resample("4h").agg(
             {k: v for k, v in _OHLCV_AGG.items() if k in h1.columns}
         ).dropna(subset=["Open"])
 
-        # Trend layers (computed on full datasets — causal via backward lookup)
+        # Trend layers
         w1       = resample_weekly(d1)
         w1_trend = compute_weekly_trend(w1, cfg.w1_ema_fast, cfg.w1_ema_slow)
         d1_trend = compute_d1_trend(d1, min_ema_gap_pips=cfg.min_trend_pips)
@@ -119,23 +133,26 @@ class MTFEngine:
         h4_swings  = find_swings(h4, cfg.swing_left, cfg.swing_right)
         all_h4_obs = detect_order_blocks(h4, h4_atr, cfg.h4_impulse_bars, cfg.h4_impulse_threshold)
 
-        # H1 indicators
+        # H1 indicators — always used for SL sizing and liquidity levels
         h1_atr    = atr(h1, cfg.atr_period)
         h1_swings = find_swings(h1, cfg.swing_left, cfg.swing_right)
 
-        # Precompute no-look-ahead mapping: H1 bar i → last CLOSED H4 bar index
-        # H4 bar with open_time T is closed when current_time >= T + 4 h.
-        h4_close_ns = (h4.index + pd.Timedelta(hours=4)).asi8
-        h1_ns       = h1.index.asi8
-        h1_to_h4    = np.searchsorted(h4_close_ns, h1_ns, side="right") - 1
+        # ── No-look-ahead index mappings ──────────────────────────────────
+        # exec bar i → last CLOSED H4 bar index (H4 bar closes at open_time + 4h)
+        h4_close_ns   = (h4.index + pd.Timedelta(hours=4)).asi8
+        exec_to_h4    = np.searchsorted(h4_close_ns, exec_df.index.asi8, side="right") - 1
+
+        # exec bar i → last CLOSED H1 bar index (needed when exec_tf == "M15")
+        h1_close_ns   = (h1.index + pd.Timedelta(hours=1)).asi8
+        exec_to_h1    = np.searchsorted(h1_close_ns, exec_df.index.asi8, side="right") - 1
 
         start_ts = pd.Timestamp(cfg.start_date).tz_localize("UTC")
         end_ts   = pd.Timestamp(cfg.end_date).tz_localize("UTC")
-        in_range = h1[(h1.index >= start_ts) & (h1.index < end_ts)]
+        in_range = exec_df[(exec_df.index >= start_ts) & (exec_df.index < end_ts)]
         if in_range.empty:
-            raise ValueError(f"No H1 data in range {cfg.start_date} → {cfg.end_date}.")
+            raise ValueError(f"No {exec_tf} data in range {cfg.start_date} → {cfg.end_date}.")
 
-        start_iloc = h1.index.get_loc(in_range.index[0])
+        start_iloc = exec_df.index.get_loc(in_range.index[0])
         if isinstance(start_iloc, slice):
             start_iloc = start_iloc.start
 
@@ -143,15 +160,16 @@ class MTFEngine:
         daily_trade_count: dict = {}
         last_h4_mitigated: int  = -1
 
-        for loc_i in range(start_iloc, len(h1)):
-            bar = h1.iloc[loc_i]
+        for loc_i in range(start_iloc, len(exec_df)):
+            bar = exec_df.iloc[loc_i]
             ts: pd.Timestamp = bar.name
             if ts >= end_ts:
                 break
 
-            h4_idx = int(h1_to_h4[loc_i])
+            h4_idx = int(exec_to_h4[loc_i])
+            h1_idx = int(exec_to_h1[loc_i])
 
-            # Update H4 OB mitigation for each newly closed H4 bar
+            # Lazily update H4 OB mitigation on each newly closed H4 bar
             if h4_idx > last_h4_mitigated and h4_idx >= 0:
                 for j in range(last_h4_mitigated + 1, h4_idx + 1):
                     h4_bar = h4.iloc[j]
@@ -160,7 +178,7 @@ class MTFEngine:
                 last_h4_mitigated = h4_idx
 
             if self.portfolio.open_trade is not None:
-                self._check_exit(h1, loc_i)
+                self._check_exit(exec_df, loc_i)
             if self.portfolio.open_trade is not None:
                 self._check_eod_close(bar, ts)
 
@@ -169,31 +187,37 @@ class MTFEngine:
                 count = daily_trade_count.get(date_key, 0)
                 if count < cfg.max_trades_per_day:
                     opened = self._look_for_entry(
-                        h1, h4_swings, h4_atr, h1_atr, h1_swings,
-                        w1_trend, d1_trend, all_h4_obs, loc_i, h4_idx,
+                        exec_df, h4_swings, h4_atr, h1_atr, h1_swings,
+                        w1_trend, d1_trend, all_h4_obs,
+                        loc_i, h4_idx, h1_idx,
                     )
                     if opened:
                         daily_trade_count[date_key] = count + 1
 
-            equity_curve[ts] = self.portfolio.equity
+            # Record equity at H1 granularity to keep curve readable
+            if exec_tf == "M15" and ts.minute != 0:
+                pass
+            else:
+                equity_curve[ts] = self.portfolio.equity
 
         if self.portfolio.open_trade is not None:
-            last = h1.iloc[-1]
+            last = exec_df.iloc[-1]
             self.portfolio.close(last["Close"], last.name, "end_of_data")
 
         return MTFResult(
             trades=self.portfolio.trades,
             equity_curve=pd.Series(equity_curve),
             config=cfg,
+            exec_tf=exec_tf,
         )
 
     # ── Position management ────────────────────────────────────────────────
 
-    def _check_exit(self, h1: pd.DataFrame, idx: int) -> None:
+    def _check_exit(self, exec_df: pd.DataFrame, idx: int) -> None:
         t = self.portfolio.open_trade
         if t is None:
             return
-        bar = h1.iloc[idx]
+        bar = exec_df.iloc[idx]
         ts  = bar.name
         if t.direction == "bullish":
             if bar["Low"] <= t.stop_loss:
@@ -215,7 +239,7 @@ class MTFEngine:
 
     def _look_for_entry(
         self,
-        h1: pd.DataFrame,
+        exec_df: pd.DataFrame,
         h4_swings: pd.DataFrame,
         h4_atr: pd.Series,
         h1_atr: pd.Series,
@@ -223,14 +247,15 @@ class MTFEngine:
         w1_trend: pd.Series,
         d1_trend: pd.Series,
         all_h4_obs: list[OrderBlock],
-        h1_idx: int,
+        exec_idx: int,
         h4_idx: int,
+        h1_idx: int,
     ) -> bool:
         cfg = self.cfg
-        bar = h1.iloc[h1_idx]
+        bar = exec_df.iloc[exec_idx]
         ts  = bar.name
 
-        # Gate 1: session (London + NY)
+        # Gate 1: session filter (London + NY)
         if not is_in_session(ts):
             return False
 
@@ -239,7 +264,7 @@ class MTFEngine:
         if d1_bias == TrendLabel.NEUTRAL:
             return False
 
-        # Gate 3: W1 must not contradict D1 (neutral W1 is allowed)
+        # Gate 3: W1 must not contradict D1 (W1 neutral is allowed)
         w1_bias = get_weekly_trend_at(ts, w1_trend)
         if w1_bias != TrendLabel.NEUTRAL and w1_bias != d1_bias:
             return False
@@ -277,17 +302,19 @@ class MTFEngine:
         if np.isnan(h4_atr_val) or h4_atr_val == 0:
             return False
 
-        # Gate 6: H4 OB ∩ H4 Fibonacci confluence
+        # Gate 6: H4 OB ∩ H4 Fibonacci confluence zone
         confluence = find_confluence(active_h4_obs, fib_levels, direction, h4_atr_val)
         if confluence is None:
             return False
 
-        # Gate 7: H1 entry trigger inside the H4 zone
-        signal = check_entry_trigger(h1, h1_idx, direction, confluence)
+        # Gate 7: entry trigger on execution TF inside H4 zone
+        signal = check_entry_trigger(exec_df, exec_idx, direction, confluence)
         if signal is None:
             return False
 
-        # Gate 8: risk setup
+        # Gate 8: risk setup (SL sized on H1 ATR — more robust than exec-TF ATR)
+        if h1_idx < 0:
+            return False
         h1_atr_val = float(h1_atr.iloc[h1_idx])
         if np.isnan(h1_atr_val) or h1_atr_val == 0:
             return False

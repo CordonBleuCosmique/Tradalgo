@@ -9,8 +9,9 @@ import yfinance as yf
 
 @dataclass
 class MarketData:
-    h1: pd.DataFrame   # OHLCV, UTC-indexed
-    d1: pd.DataFrame   # OHLCV, UTC-indexed
+    h1: pd.DataFrame                    # OHLCV, UTC-indexed
+    d1: pd.DataFrame                    # OHLCV, UTC-indexed
+    m15: pd.DataFrame = None            # M15 OHLCV — populated when source is M1-level CSV
 
 
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -70,14 +71,18 @@ def _load_csv(csv_path: str, source: str) -> pd.DataFrame:
     return df.sort_index()
 
 
-def _resample_to_h1(df: pd.DataFrame) -> pd.DataFrame:
-    return df.resample("1h").agg({
+def _resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    return df.resample(rule).agg({
         "Open": "first",
         "High": "max",
         "Low": "min",
         "Close": "last",
         "Volume": "sum",
     }).dropna(subset=["Open"])
+
+
+def _resample_to_h1(df: pd.DataFrame) -> pd.DataFrame:
+    return _resample(df, "1h")
 
 
 def _cache_path(cache_dir: str, key: str) -> Path:
@@ -115,6 +120,8 @@ def load_data(
     h1_cache = _cache_path(cache_dir, f"H1_{source}_{start.replace('-','')}_{safe_end}")
     d1_cache = _cache_path(cache_dir, f"D1_{start.replace('-','')}_{safe_end}")
 
+    m15 = None
+
     # --- H1 ---
     if not force_download and h1_cache.exists():
         h1 = _load_cache(h1_cache)
@@ -125,9 +132,23 @@ def load_data(
             assert csv_path, "csv_path is required for non-yfinance sources"
             raw = _load_csv(csv_path, source)
             bars_per_day = len(raw) / max(1, (raw.index[-1] - raw.index[0]).days)
-            h1 = _resample_to_h1(raw) if bars_per_day > 50 else raw
-            h1 = h1.loc[warmup_start:end]
+            if bars_per_day > 200:
+                # M1-level data: produce M15 and H1 from same raw feed
+                m15 = _resample(raw, "15min").loc[warmup_start:end]
+                h1  = _resample(raw, "1h").loc[warmup_start:end]
+            elif bars_per_day > 50:
+                h1  = _resample_to_h1(raw).loc[warmup_start:end]
+            else:
+                h1  = raw.loc[warmup_start:end]
         _save_cache(h1, h1_cache)
+
+    # Cache M15 separately (only when derived from M1 source)
+    if m15 is not None:
+        m15_cache = _cache_path(cache_dir, f"M15_{source}_{start.replace('-','')}_{safe_end}")
+        if not force_download and m15_cache.exists():
+            m15 = _load_cache(m15_cache)
+        else:
+            _save_cache(m15, m15_cache)
 
     # --- D1 ---
     if not force_download and d1_cache.exists():
@@ -136,11 +157,8 @@ def load_data(
         if source == "yfinance":
             d1 = _load_yfinance(ticker, "1d", warmup_start, end)
         else:
-            # Resample D1 directly from the H1 CSV — no network needed
-            d1 = h1.resample("1D").agg(
-                {"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}
-            ).dropna(subset=["Open"])
+            d1 = _resample(h1, "1D")
             d1 = d1[d1.index.dayofweek < 5]
         _save_cache(d1, d1_cache)
 
-    return MarketData(h1=h1, d1=d1)
+    return MarketData(h1=h1, d1=d1, m15=m15)
