@@ -81,6 +81,7 @@ async function pollStatus() {
         showError(s.error);
       } else if (s.has_result) {
         await loadResults();
+        loadBacktestHistory();   // refresh history after new backtest
       }
     }
   } catch (_) {}
@@ -310,6 +311,80 @@ document.getElementById("btnGitPull").addEventListener("click", async () => {
     badge.textContent = "Erreur";
   }
 });
+
+/* ═══════════════════════════════════════════════════
+   BACKTEST HISTORY
+   ═══════════════════════════════════════════════════ */
+
+async function loadBacktestHistory() {
+  const sel = document.getElementById("historySelect");
+  try {
+    const resp = await fetch("/api/backtests");
+    const list = await resp.json();
+    sel.innerHTML = '<option value="">— Sélectionner un backtest —</option>' +
+      list.map(b => {
+        const dt  = b.saved_at
+          ? new Date(b.saved_at).toLocaleString("fr-FR", {
+              day: "2-digit", month: "2-digit", year: "2-digit",
+              hour: "2-digit", minute: "2-digit"
+            })
+          : "?";
+        const ret = (b.total_return_pct >= 0 ? "+" : "") + b.total_return_pct + "%";
+        const mode = (b.mode || "?").toUpperCase();
+        return `<option value="${b.bt_id}">#${b.bt_id} · ${dt} · ${mode} · ${ret} · ${b.total_trades} trades</option>`;
+      }).join("");
+    _updateHistoryButtons();
+  } catch (e) {
+    console.warn("loadBacktestHistory:", e);
+  }
+}
+
+function _updateHistoryButtons() {
+  const has = !!document.getElementById("historySelect").value;
+  ["btnLoadHistory", "btnDlCsv", "btnDlPng", "btnDlZip"].forEach(id => {
+    document.getElementById(id).disabled = !has;
+  });
+}
+
+document.getElementById("historySelect").addEventListener("change", _updateHistoryButtons);
+
+document.getElementById("btnRefreshHistory").addEventListener("click", loadBacktestHistory);
+
+document.getElementById("btnLoadHistory").addEventListener("click", async () => {
+  const bt_id = document.getElementById("historySelect").value;
+  if (!bt_id) return;
+
+  const btn = document.getElementById("btnLoadHistory");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+  try {
+    const resp = await fetch(`/api/backtest/${bt_id}`);
+    if (!resp.ok) {
+      const err = await resp.json();
+      showError(err.error || "Erreur de chargement");
+      return;
+    }
+    backtestResult = await resp.json();
+    displayResults(backtestResult);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-folder2-open"></i> Charger ce backtest';
+    _updateHistoryButtons();
+  }
+});
+
+function _dlBacktest(filetype) {
+  const bt_id = document.getElementById("historySelect").value;
+  if (bt_id) window.location.href = `/api/download/${bt_id}/${filetype}`;
+}
+document.getElementById("btnDlCsv").addEventListener("click", () => _dlBacktest("csv"));
+document.getElementById("btnDlPng").addEventListener("click", () => _dlBacktest("png"));
+document.getElementById("btnDlZip").addEventListener("click", () => _dlBacktest("zip"));
+
+// Populate history on page load
+loadBacktestHistory();
+
 
 /* ═══════════════════════════════════════════════════
    UTILS

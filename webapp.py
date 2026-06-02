@@ -4,18 +4,21 @@ Tradalgo Web Interface — Lance les backtests, visualise les charts, streame le
 Usage: python webapp.py   (puis http://localhost:5000)
 """
 from __future__ import annotations
+import csv
 import io
 import json
 import subprocess
 import sys
 import threading
 import traceback
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
 import pandas as pd
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -28,6 +31,60 @@ from tradalgo.reporting.metrics import compute_metrics
 
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
+
+OUTPUT_DIR = Path("output")
+
+
+# ── Backtest artifact helpers ──────────────────────────────────────────────────
+
+def _next_backtest_dir() -> Path:
+    """Return the next output/backtest_NNN directory (not yet created)."""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    nums = [
+        int(d.name[9:])
+        for d in OUTPUT_DIR.iterdir()
+        if d.is_dir() and d.name.startswith("backtest_") and d.name[9:].isdigit()
+    ]
+    n = (max(nums) + 1) if nums else 1
+    return OUTPUT_DIR / f"backtest_{n:03d}"
+
+
+def _save_backtest_artifacts(result: dict, equity_series: "pd.Series") -> str:
+    """
+    Persist result.json, trades.csv, equity_curve.png to output/backtest_NNN/.
+    Returns the bt_id string (e.g. '003').
+    """
+    from tradalgo.reporting.charts import plot_equity_curve
+
+    bt_dir = _next_backtest_dir()
+    bt_dir.mkdir(parents=True, exist_ok=True)
+    bt_id = bt_dir.name[9:]   # '003'
+
+    # Full result JSON (used by /api/backtest/<bt_id>)
+    payload = {**result, "bt_id": bt_id, "saved_at": datetime.utcnow().isoformat()}
+    (bt_dir / "result.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    # Trades CSV
+    trades = result.get("trades", [])
+    if trades:
+        keys = list(trades[0].keys())
+        with open(bt_dir / "trades.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=keys)
+            w.writeheader()
+            w.writerows(trades)
+
+    # Equity curve PNG
+    if equity_series is not None and not equity_series.empty:
+        params = result.get("params", {})
+        mode   = result.get("mode", "intraday").upper()
+        title  = (
+            f"Tradalgo #{bt_id} — {mode} | "
+            f"{params.get('start', '')} → {params.get('end', '')} | "
+            f"${float(params.get('equity', 0)):,.0f}"
+        )
+        plot_equity_curve(equity_series, str(bt_dir / "equity_curve.png"), title=title)
+
+    return bt_id
 
 # ── Shared state ───────────────────────────────────────────────────────────────
 
@@ -180,24 +237,33 @@ def _do_backtest(params: dict) -> None:
         for ts, v in result.equity_curve.items()
     ]
 
+    result_dict = {
+        "mode": mode,
+        "params": params,
+        "metrics": {
+            "total_trades": metrics.total_trades,
+            "win_rate": metrics.win_rate,
+            "avg_rr": metrics.avg_rr,
+            "profit_factor": metrics.profit_factor,
+            "sharpe_ratio": metrics.sharpe_ratio,
+            "max_drawdown_pct": metrics.max_drawdown_pct,
+            "total_return_pct": metrics.total_return_pct,
+            "avg_pnl_pips": metrics.avg_pnl_pips,
+            "total_pnl_usd": metrics.total_pnl_usd,
+        },
+        "trades": trades_out,
+        "equity_curve": equity_curve,
+    }
+
+    try:
+        bt_id = _save_backtest_artifacts(result_dict, result.equity_curve)
+        result_dict["bt_id"] = bt_id
+        print(f"  Sauvegardé → output/backtest_{bt_id}/")
+    except Exception as e:
+        print(f"  ⚠ Sauvegarde impossible: {e}")
+
     with _state.lock:
-        _state.result = {
-            "mode": mode,
-            "params": params,
-            "metrics": {
-                "total_trades": metrics.total_trades,
-                "win_rate": metrics.win_rate,
-                "avg_rr": metrics.avg_rr,
-                "profit_factor": metrics.profit_factor,
-                "sharpe_ratio": metrics.sharpe_ratio,
-                "max_drawdown_pct": metrics.max_drawdown_pct,
-                "total_return_pct": metrics.total_return_pct,
-                "avg_pnl_pips": metrics.avg_pnl_pips,
-                "total_pnl_usd": metrics.total_pnl_usd,
-            },
-            "trades": trades_out,
-            "equity_curve": equity_curve,
-        }
+        _state.result = result_dict
         _state.running = False
 
     print(f"\n✓ Terminé — {len(trades_out)} trades | Retour: {metrics.total_return_pct}% | Sharpe: {metrics.sharpe_ratio}")
@@ -467,6 +533,90 @@ def chart_data(tf: str):
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/backtests")
+def list_backtests():
+    """List all saved backtests (newest first) with summary metadata."""
+    OUTPUT_DIR.mkdir(exist_ok=True)
+    items = []
+    for d in sorted(OUTPUT_DIR.iterdir(), reverse=True):
+        if not (d.is_dir() and d.name.startswith("backtest_") and d.name[9:].isdigit()):
+            continue
+        rf = d / "result.json"
+        if not rf.exists():
+            continue
+        try:
+            data = json.loads(rf.read_text(encoding="utf-8"))
+            m = data.get("metrics", {})
+            items.append({
+                "bt_id":            data.get("bt_id", d.name[9:]),
+                "saved_at":         data.get("saved_at", ""),
+                "mode":             data.get("mode", "?"),
+                "start":            data.get("params", {}).get("start", ""),
+                "end":              data.get("params", {}).get("end", ""),
+                "equity":           data.get("params", {}).get("equity", ""),
+                "total_trades":     m.get("total_trades", 0),
+                "total_return_pct": m.get("total_return_pct", 0),
+                "sharpe_ratio":     m.get("sharpe_ratio", 0),
+                "win_rate":         m.get("win_rate", 0),
+                "has_csv":          (d / "trades.csv").exists(),
+                "has_png":          (d / "equity_curve.png").exists(),
+            })
+        except Exception:
+            continue
+    return jsonify(items)
+
+
+@app.route("/api/backtest/<bt_id>")
+def get_backtest(bt_id: str):
+    """Load a saved backtest by ID and make it the active result (for chart rendering)."""
+    rf = OUTPUT_DIR / f"backtest_{bt_id}" / "result.json"
+    if not rf.exists():
+        return jsonify({"error": f"Backtest {bt_id} introuvable"}), 404
+    try:
+        data = json.loads(rf.read_text(encoding="utf-8"))
+        with _state.lock:
+            _state.result = data   # makes /api/chart-data work for this backtest
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/download/<bt_id>/<filetype>")
+def download_backtest(bt_id: str, filetype: str):
+    """Serve trades.csv, equity_curve.png, or both as a ZIP archive."""
+    bt_dir = OUTPUT_DIR / f"backtest_{bt_id}"
+    if not bt_dir.exists():
+        return jsonify({"error": f"Backtest {bt_id} introuvable"}), 404
+
+    if filetype == "csv":
+        p = bt_dir / "trades.csv"
+        if not p.exists():
+            return jsonify({"error": "CSV introuvable"}), 404
+        return send_file(p.resolve(), as_attachment=True,
+                         download_name=f"trades_{bt_id}.csv", mimetype="text/csv")
+
+    if filetype == "png":
+        p = bt_dir / "equity_curve.png"
+        if not p.exists():
+            return jsonify({"error": "PNG introuvable"}), 404
+        return send_file(p.resolve(), as_attachment=True,
+                         download_name=f"equity_{bt_id}.png", mimetype="image/png")
+
+    if filetype == "zip":
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for name in ("trades.csv", "equity_curve.png"):
+                p = bt_dir / name
+                if p.exists():
+                    zf.write(p.resolve(), name)
+        buf.seek(0)
+        return send_file(buf, as_attachment=True,
+                         download_name=f"backtest_{bt_id}.zip",
+                         mimetype="application/zip")
+
+    return jsonify({"error": f"Type inconnu: {filetype}"}), 400
 
 
 @app.route("/api/git-pull", methods=["POST"])
