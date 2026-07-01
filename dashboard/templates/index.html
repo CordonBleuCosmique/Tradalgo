@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TradAlgo Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <header>
+        <h1>TradAlgo — Demo Account Monitor</h1>
+        <a class="login-link" href="{{ url_for('login') }}">Login (reconnect / pause)</a>
+    </header>
+
+    {% if token_status != "OK" %}
+    <div class="banner banner-error">
+        MCP token unhealthy ({{ token_status }}) — reconnect below.
+    </div>
+    {% endif %}
+
+    <section class="panel">
+        <h2>Status</h2>
+        <table class="kv-table">
+            <tr><td>MCP token status</td><td><span class="badge badge-{{ token_status|lower }}">{{ token_status }}</span></td></tr>
+            <tr><td>Scheduler daemon</td><td>{{ "PAUSED" if scheduler_state.paused else "RUNNING" }}</td></tr>
+            <tr><td>Last heartbeat</td><td>{{ scheduler_state.last_heartbeat or "never" }}</td></tr>
+            <tr><td>Last cycle</td><td>{{ scheduler_state.last_cycle_timestamp or "never" }}</td></tr>
+            <tr><td>Last cycle latency</td><td>{{ scheduler_state.last_cycle_latency_ms or "n/a" }} ms</td></tr>
+            <tr><td>Last cycle decision</td><td>{{ scheduler_state.last_cycle_decision or "n/a" }}</td></tr>
+        </table>
+    </section>
+
+    <section class="panel">
+        <h2>Account</h2>
+        {% if account_info.error %}
+        <p class="unavailable">{{ account_info.error }}</p>
+        {% else %}
+        <table class="kv-table">
+            <tr><td>Balance</td><td>{{ account_info.balance }}</td></tr>
+            <tr><td>Equity</td><td>{{ account_info.equity }}</td></tr>
+        </table>
+        <h3>Open positions</h3>
+        {% if account_info.positions %}
+        <ul>
+            {% for pos in account_info.positions %}
+            <li>{{ pos }}</li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p>No open positions.</p>
+        {% endif %}
+        {% endif %}
+    </section>
+
+    <section class="panel">
+        <h2>Cumulative PnL</h2>
+        <canvas id="pnl-chart" width="700" height="250"></canvas>
+        <script>const pnlData = {{ pnl_json | safe }};</script>
+        <script src="{{ url_for('static', filename='chart.js') }}"></script>
+    </section>
+
+    <section class="panel">
+        <h2>Reconnect / Controls</h2>
+        <form method="post" action="{{ url_for('reconnect') }}">
+            <input type="text" name="new_token" placeholder="New CTRADER_MCP_TOKEN">
+            <button type="submit">Reconnect</button>
+        </form>
+        <form method="post" action="{{ url_for('pause') }}" style="display:inline;">
+            <button type="submit">Pause</button>
+        </form>
+        <form method="post" action="{{ url_for('resume') }}" style="display:inline;">
+            <button type="submit">Resume</button>
+        </form>
+        <p class="hint">Reconnect/Pause/Resume require logging in first.</p>
+    </section>
+
+    <section class="panel">
+        <h2>Decision history (last 50)</h2>
+        <table class="decisions-table">
+            <thead>
+                <tr>
+                    <th>Timestamp</th><th>Symbol</th><th>D1 Bias</th><th>H4 Setup</th>
+                    <th>M15 Trigger</th><th>Decision</th><th>Guardrail</th><th>Reason</th>
+                    <th>Executed</th><th>PnL</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for d in decisions %}
+                <tr>
+                    <td>{{ d.timestamp }}</td>
+                    <td>{{ d.symbol }}</td>
+                    <td>{{ d.d1_bias }}</td>
+                    <td>{{ d.h4_setup_type }}</td>
+                    <td>{{ d.m15_trigger_type }}</td>
+                    <td>{{ d.decision }}</td>
+                    <td class="badge badge-{{ d.guardrail_status|lower }}">{{ d.guardrail_status }}</td>
+                    <td>{{ d.guardrail_reason or "" }}</td>
+                    <td>{{ "yes" if d.executed else "no" }}</td>
+                    <td>{{ d.result_pnl if d.result_pnl is not none else "" }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+</body>
+</html>

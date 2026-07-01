@@ -1,0 +1,18 @@
+[Unit]
+Description=TradAlgo candle-close scheduler daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tradalgo
+WorkingDirectory=/opt/tradalgo
+EnvironmentFile=/opt/tradalgo/.env
+ExecStart=/opt/tradalgo/.venv/bin/python -m scheduler.candle_scheduler
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/tradalgo/scheduler.log
+StandardError=append:/var/log/tradalgo/scheduler.log
+
+[Install]
+WantedBy=multi-user.target

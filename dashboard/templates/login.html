@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TradAlgo — Login</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <main class="login-box">
+        <h1>TradAlgo</h1>
+        <p>Enter the dashboard password to reconnect the MCP token or pause/resume the daemon.</p>
+        {% if error %}<div class="banner banner-error">{{ error }}</div>{% endif %}
+        <form method="post" action="{{ url_for('login') }}">
+            <input type="password" name="password" placeholder="Dashboard password" autofocus required>
+            <button type="submit">Log in</button>
+        </form>
+        <p><a href="{{ url_for('index') }}">&larr; Back to read-only dashboard</a></p>
+    </main>
+</body>
+</html>

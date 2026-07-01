@@ -1,0 +1,9 @@
+timeframes:
+  bias: { tf: "D1", candles: 50 }
+  setup: { tf: "H4", candles: 50 }
+  entry: { tf: "M15", candles: 100 }
+entry_trigger: "on_m15_close"
+scheduler:
+  align_to: "M15_close"
+  latency_buffer_seconds: 45
+  max_processing_time_seconds: 300
